@@ -4,7 +4,16 @@ config.py — Tous les critères de recherche et paramètres modifiables.
 C'est LE fichier à éditer pour adapter l'outil à ta recherche :
 mots-clés, lieu, requête de référence pour le ranking, modèle d'embedding, etc.
 Aucune logique ici, uniquement de la configuration.
+
+Les valeurs portent leur VRAI TYPE, y compris les chemins (`Path`). C'est la
+seule façon de ne convertir qu'une fois : une constante exportée en `str`
+oblige chaque consommateur à se souvenir de la convertir, et il suffit qu'un
+seul oublie pour que la panne n'apparaisse qu'à l'exécution, loin d'ici.
+C'est arrivé — `CV_OUT_ROOT` en `str` a produit un `TypeError: unsupported
+operand type(s) for /: 'str' and 'str'` dans le worker.
 """
+
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # 1) Requête de référence pour le ranking sémantique
@@ -337,13 +346,11 @@ CHEMIN_BASE = "stages.db"
 #
 # Le master est le RÉSERVOIR de CV : il est lu, jamais écrit, ni par
 # stage_finder ni par le LLM. Chemin ABSOLU et propre à ce poste : cv_forge
-# est un dépôt voisin, pas un sous-dossier. Chaînes et non `Path`, pour que
-# ce fichier reste sans le moindre import — la conversion est faite par
-# `worker.py`, qui les consomme.
-CV_MASTER_PATH = r"C:\Users\toi\cv_forge\data\master.yaml"
+# est un dépôt voisin, pas un sous-dossier.
+CV_MASTER_PATH = Path(r"C:\Users\toi\cv_forge\data\master.yaml")
 
 # Racine des CV produits : un sous-dossier par offre, nommé d'après sa clé.
-CV_OUT_ROOT = r"C:\Users\toi\cv_forge\output\stages"
+CV_OUT_ROOT = Path(r"C:\Users\toi\cv_forge\output\stages")
 
 # ---------------------------------------------------------------------------
 # 9) Vérification par LLM local (Ollama) — couche « retrieve-then-verify »

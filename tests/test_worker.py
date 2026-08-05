@@ -19,11 +19,12 @@ import worker as worker_module
 
 class FauxResultat:
     def __init__(self, status="done", pdf_path="/out/cv.pdf", error=None,
-                 error_code=None):
+                 error_code=None, traceback=None):
         self.status = status
         self.pdf_path = pdf_path
         self.error = error
         self.error_code = error_code
+        self.traceback = traceback
 
 
 class FauxConfig:
@@ -249,6 +250,58 @@ def test_un_error_code_enum_est_serialise_en_chaine(base):
         error_code=Code.OLLAMA_UNAVAILABLE))
     w._traiter_un(base.conn)
     assert jobs.lire(base.conn, job["id"])["error_code"] == "OLLAMA_UNAVAILABLE"
+
+
+def test_la_pile_rendue_par_generate_cv_est_persistee(base):
+    """Régression du premier run réel. `generate_cv` attrape les exceptions
+    imprévues et ne les relève pas : sa pile partait dans SON logger, et la
+    ligne de job n'avait que « RuntimeError: ... » — de quoi constater la
+    panne, pas de quoi la situer."""
+    _offre(base.conn, "cle-a")
+    job, _ = jobs.enfiler(base.conn, "cle-a", "h")
+    pile = "Traceback (most recent call last):\n  File ...\nRuntimeError: boum"
+    w = _worker(base, generer=lambda o, t: FauxResultat(
+        status="failed", pdf_path=None, error="RuntimeError: boum",
+        error_code="INTERNAL_ERROR", traceback=pile))
+
+    w._traiter_un(base.conn)
+
+    assert jobs.lire(base.conn, job["id"])["traceback"] == pile
+
+
+def test_un_echec_sans_pile_ne_casse_pas_l_enregistrement(base):
+    """Les échecs catalogués n'en portent pas : le champ reste nul."""
+    _offre(base.conn, "cle-a")
+    job, _ = jobs.enfiler(base.conn, "cle-a", "h")
+    w = _worker(base, generer=lambda o, t: FauxResultat(
+        status="failed", pdf_path=None, error="typst absent",
+        error_code="TYPST_FAILED"))
+    w._traiter_un(base.conn)
+    assert jobs.lire(base.conn, job["id"])["traceback"] is None
+
+
+def test_le_pont_prepare_l_environnement_avant_de_charger_l_encodeur(
+        base, tmp_path, monkeypatch):
+    """L'ordre EST le propos : `truststore` doit être injecté AVANT que
+    sentence_transformers ne touche au réseau, pas après."""
+    import cv_forge
+
+    import embeddings_env
+
+    _offre(base.conn, "cle-a")
+    ordre = []
+    monkeypatch.setattr(embeddings_env, "preparer",
+                        lambda *a, **k: ordre.append("preparer") or {})
+    monkeypatch.setattr(cv_forge, "generate_cv",
+                        lambda e, **kw: ordre.append("generate") or FauxResultat())
+
+    w = worker_module.Worker(db_path=base.chemin, master_path=tmp_path / "m.yaml",
+                             out_root=tmp_path / "out", forge_config=FauxConfig())
+    offre = base.conn.execute(
+        "SELECT cle, title, company, url FROM offres WHERE cle='cle-a'").fetchone()
+    w._appel_generate_cv(offre, "texte")
+
+    assert ordre == ["preparer", "generate"]
 
 
 def test_une_offre_sans_texte_echoue_en_TEXT_MISSING(base):

@@ -36,6 +36,7 @@ import traceback as traceback_module
 from pathlib import Path
 
 import config
+import embeddings_env
 import jobs
 import ollama_pool
 import storage
@@ -85,8 +86,14 @@ class Worker:
         intervalle: float = INTERVALLE_SONDAGE_S,
     ) -> None:
         self.db_path = db_path or config.CHEMIN_BASE
-        self.master_path = Path(master_path) if master_path else config.CV_MASTER_PATH
-        self.out_root = Path(out_root) if out_root else config.CV_OUT_ROOT
+        # `Path()` sur la valeur RETENUE, jamais sur la seule branche
+        # injectée : la version précédente convertissait l'argument de test
+        # et laissait passer la constante de `config.py` telle quelle. Les
+        # tests, qui injectent toujours, ne pouvaient pas voir le défaut —
+        # la chaîne était verte avec une configuration inutilisable.
+        # `Path(Path(...))` est l'identité, donc les deux branches sont sûres.
+        self.master_path = Path(master_path or config.CV_MASTER_PATH)
+        self.out_root = Path(out_root or config.CV_OUT_ROOT)
         self._forge_config = forge_config
         self.intervalle = intervalle
 
@@ -118,6 +125,14 @@ class Worker:
         return self._forge_config
 
     def _appel_generate_cv(self, offre: dict, texte: str):
+        # AVANT l'import : `cv_forge.match` charge l'encodeur au premier
+        # texte inconnu, et `sentence_transformers` interroge alors Hugging
+        # Face. Derrière une interception TLS, cet appel échoue en
+        # CERTIFICATE_VERIFY_FAILED — ce qui est arrivé au premier vrai run.
+        # `ranker.py` réglait déjà le problème pour le classement ; ce
+        # chemin-ci ne passait par aucun des deux points d'activation.
+        embeddings_env.preparer()
+
         from cv_forge import OfferInput, generate_cv
 
         entree = OfferInput(
@@ -240,5 +255,10 @@ class Worker:
             jobs.echouer(
                 conn, job["id"], error=resultat.error or "échec sans message",
                 error_code=getattr(code, "value", code),
+                # `generate_cv` attrape les exceptions imprévues et ne les
+                # relève pas : sans ce champ, la pile resterait dans SON
+                # logger et la ligne de job n'aurait que le message. C'est
+                # exactement ce qui est arrivé au premier vrai run.
+                trace=getattr(resultat, "traceback", None),
             )
         return True
