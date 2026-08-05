@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import dedup
 from normalize import Offre
@@ -26,6 +27,66 @@ def test_dedup_exacte_arrondissements_paris():
     a = _offre("Stage Data", location="Paris 15e")
     b = _offre("Stage Data", location="Paris 8e")
     assert len(dedup.dedupliquer([a, b])) == 1
+
+
+# ---------------------------------------------------------------------
+# Mentions de genre
+#
+# Une même annonce republiée dans une autre langue ne change que sa
+# mention : « (H/F) » en français, « (M/F) » en anglais, « (M/W/D) » en
+# allemand. Si la normalisation n'en retire qu'une partie, la même offre
+# occupe deux lignes de `offres` (dont `cle` est la clé primaire) et
+# apparaît deux fois à l'écran.
+# ---------------------------------------------------------------------
+@pytest.mark.parametrize("mention", [
+    "(H/F)", "(h/f)", "H/F", "H-F", "H / F", "[H/F]",       # français
+    "(F/H)", "F/H",
+    "(M/F)", "M/F", "(F/M)", "F/M",                         # anglais
+    "(W/M)", "W/M", "(M/W)", "M/W",                         # allemand
+    "(H/F/D)", "H/F/N", "(H/F/X)", "(M/W/D)", "(F/M/X)", "(f/m/d)",
+    "(x/f/m)", "(X/F/M)",                                   # marqueur en tête
+])
+def test_toute_mention_de_genre_donne_la_meme_cle(mention):
+    nu = _offre("Stage Ingenieur IA")
+    avec = _offre(f"Stage Ingenieur IA {mention}")
+    assert dedup._cle(avec) == dedup._cle(nu), (
+        f"« {mention} » ne se replie pas sur le titre nu : la même offre "
+        f"republiée avec cette mention créerait une seconde ligne."
+    )
+
+
+def test_deux_langues_de_la_meme_offre_fusionnent():
+    """Le cas réel : LinkedIn publie en « M/F » ce qu'Adzuna publie en « H/F »."""
+    fr = _offre("Stage Ingenieur IA (H/F)", description="courte", url="http://fr")
+    en = _offre("Stage Ingenieur IA (M/F)", url="http://en",
+                description="description bien plus longue et donc plus riche")
+    resultat = dedup.dedupliquer([fr, en])
+    assert len(resultat) == 1
+    assert resultat[0].url == "http://en"          # la plus riche est gardée
+
+
+@pytest.mark.parametrize("titre, attendu", [
+    # Le séparateur est OBLIGATOIRE : sans lui, « hf » au milieu d'un mot
+    # était retiré et « Freshfields » entrait dans la clé en « fres ields ».
+    ("Freshfields Bruckhaus Deringer", "freshfields bruckhaus deringer"),
+    ("Stage HF radio", "stage hf radio"),
+    # Les frontières de mot, dans l'autre sens : le « h » de « RH » était
+    # avalé avec le « f » suivant, laissant « data r h ».
+    ("Valorisation des produits Data RH F/H", "valorisation des produits data rh"),
+    ("Stage RH", "stage rh"),
+    # Deux lettres séparées par « / » ne sont pas toutes une mention.
+    ("Data/Finance", "data finance"),
+    ("R&D / Formation", "r d formation"),
+    ("Chef de projet", "chef de projet"),
+])
+def test_ce_qui_ressemble_a_une_mention_sans_en_etre_une_est_intact(titre, attendu):
+    assert dedup._normaliser_titre(titre) == attendu
+
+
+def test_une_mention_seule_ne_vide_pas_le_titre():
+    """Garde-fou : un titre réduit à sa mention donnerait une clé vide,
+    donc partagée par toutes les offres dans ce cas."""
+    assert dedup._normaliser_titre("Stage (H/F)") == "stage"
 
 
 def test_dedup_floue_fusionne_vecteurs_proches():

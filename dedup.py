@@ -31,11 +31,47 @@ def _sans_accents(texte: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c))
 
 
+# Mentions de genre accolées aux intitulés. Une même annonce publiée en
+# « (H/F) » et en « (M/F) » doit produire UNE clé, pas deux.
+#
+# Les paires sont énumérées explicitement plutôt que dérivées d'une classe
+# de caractères : « [hfmw]/[hfmw] » accepterait « h/h » ou « f/w », qui ne
+# sont pas des mentions de genre, et l'appliquer à un intitulé anglais
+# découperait des sigles au hasard.
+#
+#   fr  H/F, F/H          en  M/F, F/M        de  M/W, W/M (souvent M/W/D)
+#
+# Le terme non binaire optionnel (D pour « divers », N, X) est accepté
+# des DEUX CÔTÉS de la paire : les annonces allemandes écrivent « m/w/d »,
+# mais « (x/f/m) » existe aussi et se rencontre en base. Ne l'accepter
+# qu'en fin laisserait un « x » orphelin dans la clé.
+#
+# Le SÉPARATEUR EST OBLIGATOIRE, et c'est une correction : la version
+# précédente le rendait optionnel (« h\s*[/-]?\s*f »), ce qui faisait
+# correspondre un simple « hf » au milieu d'un mot. « Freshfields »
+# devenait « fres ields », et le nom du cabinet entrait dans la clé
+# amputé de deux lettres.
+#
+# Les frontières de mot sont là pour la même raison, dans l'autre sens :
+# sans elles, « Data RH F/H » voyait le « h » de « RH » avalé avec le
+# « f » qui suit, laissant « data r h » — le sigle détruit ET la mention
+# mal retirée.
+_MENTION_GENRE = re.compile(
+    r"[(\[]?\s*"
+    r"\b(?:[dnx]\s*[/-]\s*)?"                # non binaire en tête : (x/f/m)
+    r"(?:h\s*[/-]\s*f|f\s*[/-]\s*h"          # français
+    r"|m\s*[/-]\s*f|f\s*[/-]\s*m"            # anglais
+    r"|m\s*[/-]\s*w|w\s*[/-]\s*m)"           # allemand
+    r"(?:\s*[/-]\s*[dnx])?\b"                # non binaire en queue : (m/w/d)
+    r"\s*[)\]]?"
+)
+
+
 def _normaliser_titre(titre: str) -> str:
     """Normalise un titre : minuscules, sans accents, sans mentions parasites."""
     t = _sans_accents(titre.lower())
     # Retire les mentions de genre courantes qui font varier les titres identiques.
-    t = re.sub(r"\(?\s*h\s*[/-]?\s*f\s*[/-]?\s*[dn]?\s*\)?", " ", t)
+    t = _MENTION_GENRE.sub(" ", t)
     # Ne garde que lettres/chiffres, réduit les espaces multiples.
     t = re.sub(r"[^a-z0-9]+", " ", t)
     return re.sub(r"\s+", " ", t).strip()
