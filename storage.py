@@ -70,9 +70,37 @@ CREATE TABLE IF NOT EXISTS verdicts (
 """
 
 
+# Délai d'attente d'un verrou avant `database is locked`, en millisecondes.
+# Le worker de génération écrit pendant que Flask lit à chaque tour de
+# polling : sans ce délai, SQLite renvoie l'erreur IMMÉDIATEMENT au lieu
+# d'attendre la fin d'une transaction qui dure quelques millisecondes.
+BUSY_TIMEOUT_MS = 5000
+
+
 def ouvrir(chemin: str | None = None) -> sqlite3.Connection:
-    """Ouvre (et initialise si besoin) la base SQLite."""
+    """Ouvre (et initialise si besoin) la base SQLite.
+
+    Deux réglages posés à CHAQUE ouverture, et pas une seule fois à la
+    création : ils sont attachés à la CONNEXION, pas au fichier. Flask et
+    le worker en ouvrent chacun la leur.
+
+    - **WAL** : lecteurs et écrivain cessent de se bloquer mutuellement.
+      Sans lui, le worker qui écrit l'avancement d'un job fait échouer le
+      polling de la page, et inversement. C'est une propriété du FICHIER,
+      persistante une fois posée, mais la re-poser est sans coût.
+    - **busy_timeout** : sur une base en WAL il reste UN écrivain à la
+      fois. Deux écritures qui se croisent doivent attendre, pas échouer.
+
+    ``:memory:`` n'a pas de journal WAL : le PRAGMA y rend « memory » sans
+    lever. Les tests s'exécutent donc à l'identique.
+    """
     conn = sqlite3.connect(chemin or config.CHEMIN_BASE)
+    # Accès aux colonnes par NOM pour le code récent (jobs.py), sans rien
+    # casser de l'ancien : `sqlite3.Row` accepte aussi l'index entier et le
+    # dépaquetage, donc les `ligne[0]` existants continuent de fonctionner.
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     conn.executescript(_SCHEMA)
     conn.commit()
     return conn

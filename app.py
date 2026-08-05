@@ -901,8 +901,21 @@ def _demarrer_logs() -> None:
         logging.getLogger(bruyant).setLevel(logging.WARNING)
 
 
+# Le reloader de Werkzeug lance DEUX interpréteurs du même script. Le
+# worker de génération de CV y tournerait en double, sans que ni le verrou
+# de thread ni le drapeau d'instance ne s'en aperçoivent — deux
+# générations Ollama simultanées, c'est-à-dire l'écroulement que l'unicité
+# du worker existe pour empêcher.
+#
+# Il est donc explicitement COUPÉ, et non laissé à son défaut : le défaut
+# dépend de `debug`, qu'un futur passage à `debug=True` changerait sans
+# qu'on pense au worker. `worker.worker_autorise(reloader_actif=...)` lit
+# cette constante et resterait correct si elle repassait à True.
+UTILISER_RELOADER = False
+
 if __name__ == "__main__":
     _demarrer_logs()
     _charger_cache()
     logger.info("Stage Finder web : http://localhost:5000  (Ctrl+C pour arrêter)")
-    app.run(host="127.0.0.1", port=5000, threaded=True)
+    app.run(host="127.0.0.1", port=5000, threaded=True,
+            use_reloader=UTILISER_RELOADER)

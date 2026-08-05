@@ -329,6 +329,23 @@ BONUS_DATE_DEBUT = 0.02
 CHEMIN_BASE = "stages.db"
 
 # ---------------------------------------------------------------------------
+# 8 bis) Génération de CV (cv_forge)
+# ---------------------------------------------------------------------------
+# stage_finder ne connaît de cv_forge qu'UNE fonction : `generate_cv`. Aucun
+# autre symbole du paquet n'est importé, et le sens de la dépendance est
+# strictement à sens unique — cv_forge n'importe rien d'ici.
+#
+# Le master est le RÉSERVOIR de CV : il est lu, jamais écrit, ni par
+# stage_finder ni par le LLM. Chemin ABSOLU et propre à ce poste : cv_forge
+# est un dépôt voisin, pas un sous-dossier. Chaînes et non `Path`, pour que
+# ce fichier reste sans le moindre import — la conversion est faite par
+# `worker.py`, qui les consomme.
+CV_MASTER_PATH = r"C:\Users\toi\cv_forge\data\master.yaml"
+
+# Racine des CV produits : un sous-dossier par offre, nommé d'après sa clé.
+CV_OUT_ROOT = r"C:\Users\toi\cv_forge\output\stages"
+
+# ---------------------------------------------------------------------------
 # 9) Vérification par LLM local (Ollama) — couche « retrieve-then-verify »
 # ---------------------------------------------------------------------------
 # Le ranking cosinus est un tri grossier bon marché : il rapproche des textes
