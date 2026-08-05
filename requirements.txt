@@ -16,7 +16,15 @@ python-jobspy>=1.1.80
 
 # Ranking sémantique local (embeddings multilingues)
 # torch est tiré automatiquement par sentence-transformers.
-sentence-transformers>=3.0
+#
+# VERSION ÉPINGLÉE À L'EXACT, et identique à celle de cv_forge
+# (pyproject.toml, extra `match`) : les deux projets partagent ce venv ET
+# ce modèle (paraphrase-multilingual-MiniLM-L12-v2). Le matching de
+# cv_forge doit rendre le même octet pour les mêmes entrées ; une montée
+# de version qui déplacerait la sortie du modèle casserait cet invariant
+# en silence. Garde-fou : cv_forge/tests/test_api.py, golden sur
+# l'embedding d'une phrase fixe.
+sentence-transformers==5.6.0
 
 # Manipulation de données pour l'export CSV (jobspy renvoie déjà des DataFrames)
 pandas>=2.0
@@ -29,3 +37,19 @@ flask>=3.0
 
 # Suite de tests (pytest + fixtures) — dépendance de développement.
 pytest>=8.0
+
+# --- Génération de CV -------------------------------------------------
+# cv_forge est un dépôt VOISIN, installé en editable depuis un chemin
+# local. Volontairement PAS listé ci-dessus : un chemin absolu n'a de sens
+# que sur ce poste, et `pip install -r` échouerait ailleurs.
+#
+#     pip install -e ../cv_forge
+#     pip install "lingua-language-detector>=2.0"    # extra `extract`
+#
+# Le sens de la dépendance est STRICTEMENT à sens unique :
+# stage_finder -> cv_forge. cv_forge n'importe rien d'ici (son module
+# `collect`, qui lançait stage_finder en subprocess, a été supprimé).
+#
+# stage_finder ne touche qu'UNE surface : `cv_forge.generate_cv`, avec
+# `OfferInput`, `GenerationResult`, `ForgeConfig` et `ErrorCode`. Tous les
+# sous-modules de cv_forge sont internes et sans promesse de stabilité.
