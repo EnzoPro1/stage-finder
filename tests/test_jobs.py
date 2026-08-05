@@ -377,6 +377,123 @@ def test_la_position_avance_quand_la_file_se_vide(conn):
 
 
 # =====================================================================
+# Orphelins — l'offre a disparu, le job reste
+#
+# Décision assumée : PAS de clé étrangère. ON DELETE CASCADE effacerait
+# les jobs pendant une fusion de doublons (déjà arrivée), RESTRICT ferait
+# échouer la migration, et les FK SQLite exigent un PRAGMA par connexion.
+# En échange, les orphelins doivent être détectables, purgeables, et ne
+# jamais faire échouer une lecture.
+# =====================================================================
+def _job_orphelin(conn, offer_id="cle-disparue", status="done"):
+    """Fabrique un job dont l'offre n'existe pas. Possible SANS FK.
+
+    Le passage en `running` vise CE job explicitement, sans passer par
+    `reclamer` : le claim est FIFO et prendrait le plus ancien `pending`
+    de la base, qui n'est pas forcément celui qu'on vient de créer.
+    """
+    job, _ = jobs.enfiler(conn, offer_id, f"hash-orphelin-{offer_id}")
+    if status != "pending":
+        conn.execute("UPDATE generation_jobs SET status='running' WHERE id=?",
+                     (job["id"],))
+        conn.commit()
+        if status == "done":
+            jobs.terminer(conn, job["id"], "/out/orphelin.pdf")
+        elif status == "failed":
+            jobs.echouer(conn, job["id"], error="raté", error_code="TYPST_FAILED")
+    return jobs.lire(conn, job["id"])
+
+
+def test_un_job_peut_exister_sans_son_offre(conn):
+    """Constat, pas souhait : sans FK, rien ne l'empêche. C'est le point
+    de départ de tout ce bloc."""
+    job = _job_orphelin(conn)
+    assert job["offer_id"] == "cle-disparue"
+    assert conn.execute("SELECT COUNT(*) FROM offres").fetchone()[0] == 0
+
+
+def test_les_orphelins_sont_detectables(conn):
+    _offre(conn, "cle-vivante")
+    vivant, _ = jobs.enfiler(conn, "cle-vivante", "h-vivant")
+    orphelin = _job_orphelin(conn)
+
+    trouves = jobs.orphelins(conn)
+    assert [j["id"] for j in trouves] == [orphelin["id"]]
+    assert vivant["id"] not in [j["id"] for j in trouves]
+
+
+def test_lire_un_job_orphelin_ne_leve_pas(conn):
+    """`GET /api/jobs/{id}` ne doit JAMAIS rendre 500 sur une offre
+    disparue : la lecture ne touche pas `offres`."""
+    job = _job_orphelin(conn)
+    relu = jobs.lire(conn, job["id"])
+    assert relu is not None
+    assert relu["status"] == "done"
+    assert relu["pdf_path"] == "/out/orphelin.pdf"
+
+
+def test_le_dernier_job_d_une_offre_disparue_se_lit(conn):
+    """Idem pour `GET /api/offers/{id}/cv/latest`."""
+    job = _job_orphelin(conn)
+    relu = jobs.dernier_pour_offre(conn, "cle-disparue")
+    assert relu is not None and relu["id"] == job["id"]
+
+
+def test_la_position_d_un_job_orphelin_ne_leve_pas(conn):
+    job = _job_orphelin(conn, status="pending")
+    assert jobs.position(conn, job["id"]) == 1
+
+
+def test_un_job_orphelin_reste_reclamable(conn):
+    """Il sera traité, échouera en OFFER_NOT_FOUND côté worker, et ne
+    bloquera donc pas la file. Le refuser au claim la bloquerait."""
+    _job_orphelin(conn, status="pending")
+    assert jobs.reclamer(conn) is not None
+
+
+def test_la_purge_supprime_les_orphelins_et_eux_seuls(conn):
+    _offre(conn, "cle-vivante")
+    vivant, _ = jobs.enfiler(conn, "cle-vivante", "h-vivant")
+    _job_orphelin(conn)
+
+    assert jobs.purger_orphelins(conn) == 1
+    assert jobs.orphelins(conn) == []
+    assert jobs.lire(conn, vivant["id"]) is not None
+
+
+def test_la_purge_prudente_epargne_ce_qui_a_produit_un_pdf(conn):
+    """Un job `done` orphelin référence un PDF encore sur le disque :
+    oublier la ligne ne supprime pas le fichier, ça le rend introuvable."""
+    fait = _job_orphelin(conn, offer_id="cle-a", status="done")
+    rate = _job_orphelin(conn, offer_id="cle-b", status="failed")
+
+    assert jobs.purger_orphelins(conn, seulement_echoues=True) == 1
+    restants = [j["id"] for j in jobs.orphelins(conn)]
+    assert restants == [fait["id"]]
+    assert rate["id"] not in restants
+
+
+def test_repointer_rattache_les_jobs_a_la_ligne_survivante(conn):
+    """Le geste qu'une FK ON UPDATE CASCADE ferait — mais déclenché quand
+    on le décide, pas comme effet de bord d'un DELETE."""
+    job = _job_orphelin(conn, offer_id="ancienne-cle")
+    _offre(conn, "nouvelle-cle")
+
+    assert jobs.repointer(conn, "ancienne-cle", "nouvelle-cle") == 1
+    assert jobs.orphelins(conn) == []
+    assert jobs.lire(conn, job["id"])["offer_id"] == "nouvelle-cle"
+
+
+def test_repointer_ne_touche_pas_les_autres_offres(conn):
+    _offre(conn, "cle-a")
+    _offre(conn, "cle-b")
+    a, _ = jobs.enfiler(conn, "cle-a", "h1")
+    b, _ = jobs.enfiler(conn, "cle-b", "h2")
+    jobs.repointer(conn, "cle-a", "cle-b")
+    assert jobs.lire(conn, b["id"])["offer_id"] == "cle-b"
+
+
+# =====================================================================
 # Texte des offres
 # =====================================================================
 def test_le_texte_se_relit(conn):

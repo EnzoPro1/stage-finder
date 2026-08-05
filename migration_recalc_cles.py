@@ -102,17 +102,57 @@ def _fusionner(groupe: list) -> dict:
     }
 
 
-def appliquer(conn: sqlite3.Connection, deplacements: list, fusions: dict) -> None:
+def _suivre_la_cle(conn: sqlite3.Connection, ancienne: str, nouvelle: str) -> int:
+    """Fait suivre jobs et texte quand une clé se déplace. Rend le nb de jobs.
+
+    Sans ce geste, déplacer une clé transformerait tous ses jobs en
+    ORPHELINS : un CV déjà produit deviendrait introuvable depuis l'offre
+    qui l'a demandé, alors que le PDF est toujours sur le disque. C'est
+    exactement ce qu'une clé étrangère ON UPDATE CASCADE ferait — mais
+    déclenché quand on le décide, et non comme effet de bord d'un DELETE
+    (cf. le commentaire de `jobs.py` sur le refus des FK).
+
+    Silencieux si les tables n'existent pas : ce script doit rester
+    exécutable sur une base antérieure au CP2.
+    """
+    tables = {l[0] for l in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    bouges = 0
+    if "generation_jobs" in tables:
+        bouges = conn.execute(
+            "UPDATE generation_jobs SET offer_id = ? WHERE offer_id = ?",
+            (nouvelle, ancienne),
+        ).rowcount
+    if "offres_texte" in tables:
+        ligne = conn.execute(
+            "SELECT texte, recupere_le FROM offres_texte WHERE cle = ?", (ancienne,)
+        ).fetchone()
+        if ligne is not None:
+            conn.execute("DELETE FROM offres_texte WHERE cle = ?", (ancienne,))
+            # OR REPLACE : en fusion, la ligne survivante peut déjà avoir
+            # son texte, et deux clés convergent vers une seule.
+            conn.execute(
+                "INSERT OR REPLACE INTO offres_texte (cle, texte, recupere_le) "
+                "VALUES (?,?,?)", (nouvelle, ligne["texte"], ligne["recupere_le"]))
+    return bouges
+
+
+def appliquer(conn: sqlite3.Connection, deplacements: list, fusions: dict) -> int:
     """Écrit dans une seule transaction. Tout ou rien.
+
+    Rend le nombre de jobs re-pointés.
 
     Les fusions passent AVANT les déplacements : elles suppriment des lignes,
     ce qui libère d'éventuelles clés cibles.
     """
+    repointes = 0
     with conn:                       # commit/rollback automatique
         for nouvelle, groupe in fusions.items():
             fusionnee = _fusionner(groupe)
             base = fusionnee["base"]
             for ligne in groupe:
+                if ligne["cle"] != nouvelle:
+                    repointes += _suivre_la_cle(conn, ligne["cle"], nouvelle)
                 conn.execute("DELETE FROM offres WHERE cle = ?", (ligne["cle"],))
             colonnes = [k for k in base.keys() if k != "cle"]
             valeurs = {k: base[k] for k in colonnes}
@@ -125,7 +165,9 @@ def appliquer(conn: sqlite3.Connection, deplacements: list, fusions: dict) -> No
                 (nouvelle, *[valeurs[k] for k in colonnes]),
             )
         for ancienne, nouvelle, _ in deplacements:
+            repointes += _suivre_la_cle(conn, ancienne, nouvelle)
             conn.execute("UPDATE offres SET cle = ? WHERE cle = ?", (nouvelle, ancienne))
+    return repointes
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -165,7 +207,9 @@ def main(argv: list[str] | None = None) -> int:
 
     sauvegarde = _sauvegarder(args.db)
     print(f"\nSauvegarde     : {sauvegarde}")
-    appliquer(conn, deplacements, fusions)
+    repointes = appliquer(conn, deplacements, fusions)
+    if repointes:
+        print(f"Jobs re-pointés: {repointes}  (aucun orphelin créé)")
 
     restants, _ = planifier(conn)
     apres = conn.execute("SELECT COUNT(*) FROM offres").fetchone()[0]

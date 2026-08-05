@@ -90,6 +90,40 @@ class TransitionInvalide(RuntimeError):
     """Transition d'état refusée. Signale un bug d'appelant, pas un aléa."""
 
 
+# =====================================================================
+# Pourquoi `offer_id` n'est PAS une clé étrangère vers `offres.cle`
+#
+# La contrainte serait tentante : `offer_id` référence bien `offres.cle`,
+# qui est une clé primaire. Elle est pourtant refusée, pour trois raisons
+# qui vont toutes dans le même sens.
+#
+# 1. LES DEUX ACTIONS POSSIBLES SONT MAUVAISES. `migration_recalc_cles.py`
+#    supprime et réinsère légitimement des lignes de `offres` pour fusionner
+#    des doublons — c'est déjà arrivé. Avec ON DELETE CASCADE, les jobs et
+#    la trace des PDF déjà produits disparaîtraient EN SILENCE pendant une
+#    migration ; avec RESTRICT, la migration échouerait purement et
+#    simplement. Aucune des deux n'est le comportement voulu, qui est de
+#    RE-POINTER le job vers la ligne survivante.
+#
+# 2. UN JOB SURVIT À SON OFFRE, ET SON ARTEFACT AUSSI. Le PDF est sur le
+#    disque. Effacer la ligne qui le référence en laissant le fichier ne
+#    supprime pas le CV, ça le rend introuvable.
+#
+# 3. `cle` EST DÉRIVÉE DU CONTENU. Une offre disparue peut revenir à
+#    l'identique au prochain scrape, sous la même clé : son historique de
+#    génération se rattache alors tout seul. CASCADE l'aurait détruit
+#    définitivement, pour une absence temporaire.
+#
+# S'y ajoute que les FK de SQLite exigent `PRAGMA foreign_keys=ON` sur
+# CHAQUE connexion : une garantie qui dépend de tous les appelants ne
+# l'oublient jamais n'est pas une garantie.
+#
+# En échange, les orphelins doivent être DÉTECTABLES et PURGEABLES — c'est
+# l'objet de `orphelins()` et `purger_orphelins()` ci-dessous — et les
+# lectures ne doivent jamais échouer sur une offre disparue.
+# =====================================================================
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Crée tables et index si besoin. Idempotente, sûre à chaque démarrage."""
     conn.executescript(_SCHEMA)
@@ -328,6 +362,58 @@ def reprendre_orphelins(conn: sqlite3.Connection) -> tuple[int, int]:
     if repris or abandonnes:
         logger.info("Jobs orphelins : %d repris, %d abandonné(s).", repris, abandonnes)
     return repris, abandonnes
+
+
+# =====================================================================
+# Orphelins — jobs dont l'offre a disparu
+# =====================================================================
+def orphelins(conn: sqlite3.Connection) -> list[dict]:
+    """Jobs dont ``offer_id`` ne désigne plus aucune ligne de ``offres``.
+
+    Cas nominal : une fusion de doublons a supprimé la ligne. Le job reste
+    valide en tant qu'ARCHIVE — son PDF existe toujours — mais il n'est
+    plus atteignable depuis la liste des offres.
+    """
+    return [dict(l) for l in conn.execute(
+        """SELECT j.* FROM generation_jobs j
+           LEFT JOIN offres o ON o.cle = j.offer_id
+           WHERE o.cle IS NULL
+           ORDER BY j.id"""
+    )]
+
+
+def repointer(conn: sqlite3.Connection, ancienne: str, nouvelle: str) -> int:
+    """Rattache les jobs d'une offre fusionnée à la ligne survivante.
+
+    À appeler par toute migration qui déplace ou fusionne des ``cle``.
+    C'est le geste que ferait ON UPDATE CASCADE, mais déclenché quand on
+    le décide et pas comme effet de bord d'un DELETE.
+    """
+    with conn:
+        curseur = conn.execute(
+            "UPDATE generation_jobs SET offer_id = ? WHERE offer_id = ?",
+            (nouvelle, ancienne),
+        )
+    return curseur.rowcount
+
+
+def purger_orphelins(conn: sqlite3.Connection, *, seulement_echoues: bool = False) -> int:
+    """Supprime les jobs orphelins. Rend le nombre de lignes supprimées.
+
+    ``seulement_echoues`` limite la purge aux jobs qui n'ont rien produit :
+    c'est le défaut prudent à privilégier quand on ne veut pas perdre la
+    trace d'un PDF encore présent sur le disque. La purge ne supprime
+    AUCUN fichier — elle ne fait qu'oublier des lignes.
+    """
+    condition = "AND j.status = 'failed'" if seulement_echoues else ""
+    with conn:
+        curseur = conn.execute(
+            f"""DELETE FROM generation_jobs WHERE id IN (
+                    SELECT j.id FROM generation_jobs j
+                    LEFT JOIN offres o ON o.cle = j.offer_id
+                    WHERE o.cle IS NULL {condition})"""
+        )
+    return curseur.rowcount
 
 
 # =====================================================================

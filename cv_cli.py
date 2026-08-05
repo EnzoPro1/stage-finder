@@ -106,6 +106,34 @@ def cmd_enfiler(args) -> int:
     return 0
 
 
+def cmd_orphelins(args) -> int:
+    """Jobs dont l'offre a disparu (fusion de doublons, purge de la base)."""
+    conn = storage.ouvrir(args.db)
+    jobs.ensure_schema(conn)
+    liste = jobs.orphelins(conn)
+
+    if not liste:
+        print("Aucun job orphelin.")
+        conn.close()
+        return 0
+
+    print(f"{len(liste)} job(s) orphelin(s) — leur offre n'existe plus :")
+    for job in liste:
+        pdf = job["pdf_path"] or "aucun PDF"
+        print(f"  #{job['id']:<4} {job['status']:<8} {job['offer_id'][:12]}…  {pdf}")
+
+    if not args.purger:
+        print("\nRien n'a été supprimé. Ajoutez --purger pour les oublier.")
+        print("  Note : la purge ne supprime AUCUN fichier PDF.")
+        conn.close()
+        return 0
+
+    n = jobs.purger_orphelins(conn, seulement_echoues=args.seulement_echoues)
+    print(f"\n{n} job(s) purgé(s). Les PDF éventuels sont restés sur le disque.")
+    conn.close()
+    return 0
+
+
 def cmd_travailler(args) -> int:
     if not worker_module.worker_autorise():
         print("Ce processus ne doit pas porter le worker.", file=sys.stderr)
@@ -156,6 +184,12 @@ def main(argv: list[str] | None = None) -> int:
     p_enf = sous.add_parser("enfiler", help="Demande un CV pour une offre")
     p_enf.add_argument("cle", help="Clé de l'offre, ou un préfixe non ambigu")
 
+    p_orp = sous.add_parser("orphelins", help="Jobs dont l'offre a disparu")
+    p_orp.add_argument("--purger", action="store_true",
+                       help="Supprime les lignes (jamais les fichiers PDF)")
+    p_orp.add_argument("--seulement-echoues", action="store_true",
+                       help="Ne purge que les jobs qui n'ont rien produit")
+
     p_tra = sous.add_parser("travailler", help="Consomme la file")
     p_tra.add_argument("--une-passe", action="store_true",
                        help="S'arrête dès que la file est vide")
@@ -163,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
                        default=worker_module.INTERVALLE_SONDAGE_S)
 
     args = parser.parse_args(argv)
-    return {"etat": cmd_etat, "enfiler": cmd_enfiler,
+    return {"etat": cmd_etat, "enfiler": cmd_enfiler, "orphelins": cmd_orphelins,
             "travailler": cmd_travailler}[args.commande](args)
 
 
