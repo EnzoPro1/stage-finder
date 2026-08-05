@@ -13,5 +13,15 @@ __pycache__/
 stages.csv
 stages.html
 
+# Artefacts de run — jamais versionnés.
+# `stages.db` contient des offres scrapées : elle ne doit pas partir dans un
+# clone. Ces motifs vivaient dans `.git/info/exclude`, qui n'est NI versionné
+# NI cloné — il ne protégeait donc que cette copie de travail.
+stages.db
+stages.avant-recalc-*.db
+.rank_cache.json
+.rome_cache.json
+.pytest_cache/
+
 # Cache modèles HuggingFace (si local au projet)
 .cache/
