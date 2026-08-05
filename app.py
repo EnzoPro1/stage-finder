@@ -24,20 +24,24 @@ Lancement :  python app.py   puis ouvrir http://localhost:5000
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
 import threading
 from datetime import datetime
+from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request, send_file, url_for
 
 import console  # noqa: F401 - force UTF-8 sur la console Windows
 import config
+import jobs
 import main
 import market
 import storage
 import verifier
+import worker as worker_module
 from normalize import Offre
 from sources import RedactingFilter
 
@@ -382,6 +386,281 @@ def api_tout():
 
     threading.Thread(target=_thread_tout, args=(utiliser_jobspy, n), daemon=True).start()
     return jsonify({"ok": True})
+
+
+# ===========================================================================
+# Génération de CV — couche HTTP au-dessus de la file (jobs.py / worker.py)
+#
+# Routes ADDITIVES : rien au-dessus de cette ligne n'est modifié. L'état en
+# mémoire ``ETAT`` et son verrou ne sont pas touchés non plus — la file vit
+# en base, pas en RAM, précisément pour survivre à un redémarrage et pour
+# être lisible par le worker, qui est dans un autre thread.
+#
+# Pas d'UI ici : le CP4 la posera par-dessus ces quatre routes.
+# ===========================================================================
+
+# --- Catalogue d'erreurs ---------------------------------------------------
+# Recopie LITTÉRALE de ``cv_forge.ErrorCode``, et non un import : le chemin
+# d'erreur ne doit pas dépendre du chargement d'un paquet tiers — un
+# ``ImportError`` pendant qu'on formate une erreur rendrait le 500 nu que
+# tout ceci existe pour empêcher. ``test_le_catalogue_suit_cv_forge``
+# compare les deux ensembles et tombe si cv_forge en ajoute un.
+CODES_CV_FORGE = frozenset({
+    "OFFER_NOT_FOUND", "MASTER_INVALID", "OLLAMA_UNAVAILABLE",
+    "EXTRACTION_FAILED", "MATCHING_EMPTY", "TYPST_FAILED", "INTERNAL_ERROR",
+})
+
+# Codes PROPRES à stage_finder : cv_forge ne peut structurellement pas les
+# produire, parce qu'ils décrivent des états qui n'existent qu'en amont de
+# ``generate_cv``.
+#
+#   TEXT_MISSING    une ``OfferInput`` porte toujours son texte ; c'est
+#                   stage_finder qui doit d'abord le trouver en base.
+#   JOB_NOT_FOUND   cv_forge ne connaît pas la notion de job — la file est
+#                   entièrement à nous.
+#   PDF_UNAVAILABLE « il n'y a pas de PDF à te servir ». Quatre causes (job
+#                   inachevé, aucun chemin enregistré, fichier disparu du
+#                   disque, chemin hors de la racine de sortie) pour une
+#                   seule situation côté appelant ; c'est le MESSAGE qui
+#                   nomme la cause, pas le code. Garder le catalogue court
+#                   et fermé vaut mieux qu'un code par nuance.
+CODES_STAGE_FINDER = frozenset({"TEXT_MISSING", "JOB_NOT_FOUND", "PDF_UNAVAILABLE"})
+
+CATALOGUE_ERREURS = CODES_CV_FORGE | CODES_STAGE_FINDER
+
+
+def _erreur(code: str, message: str, http: int):
+    """Réponse d'erreur JSON. **Toujours** porteuse d'un code du catalogue.
+
+    Un code hors catalogue est un bug d'appelant : on le journalise et on
+    rend ``INTERNAL_ERROR`` plutôt que de laisser fuiter un code que le
+    client ne saura pas interpréter.
+    """
+    if code not in CATALOGUE_ERREURS:
+        logger.error("Code d'erreur hors catalogue : %r (message : %s)", code, message)
+        code = "INTERNAL_ERROR"
+    return jsonify({"error_code": code, "error_message": message}), http
+
+
+def _json_api(vue):
+    """Garantit qu'une vue ne rend JAMAIS un 500 nu.
+
+    ``generate_cv`` promet de ne pas lever ; le reste du chemin (SQLite,
+    lecture de fichier, sérialisation) n'a fait aucune promesse. Sans ce
+    filet, une ``sqlite3.OperationalError`` sortirait en page HTML de
+    Werkzeug, que le front ne sait pas lire — il afficherait « erreur »
+    sans code ni message exploitable.
+
+    Décoré vue par vue, et non posé en ``errorhandler`` global : le
+    comportement des routes existantes doit rester rigoureusement
+    inchangé.
+    """
+    @functools.wraps(vue)
+    def enveloppe(*args, **kwargs):
+        try:
+            return vue(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - c'est précisément le propos
+            logger.exception("Erreur non prévue dans %s.", vue.__name__)
+            return _erreur("INTERNAL_ERROR", f"{type(exc).__name__}: {exc}", 500)
+    return enveloppe
+
+
+# --- Connexion SQLite, une par requête -------------------------------------
+def _conn():
+    """Connexion à la base pour la requête en cours.
+
+    Une par requête, et non une partagée : un objet ``sqlite3.Connection``
+    n'est pas fait pour traverser les threads, et Flask sert en mode
+    ``threaded=True``. Le worker a la sienne, de son côté — c'est ce que
+    le mode WAL posé par ``storage.ouvrir`` rend indolore.
+    """
+    if "conn_cv" not in g:
+        g.conn_cv = storage.ouvrir(config.CHEMIN_BASE)
+        jobs.ensure_schema(g.conn_cv)
+    return g.conn_cv
+
+
+@app.teardown_appcontext
+def _fermer_conn_cv(_exception=None) -> None:
+    conn = g.pop("conn_cv", None)
+    if conn is not None:
+        conn.close()
+
+
+# --- Sérialisation d'un job ------------------------------------------------
+def _vue_job(conn, job: dict) -> dict:
+    """Représentation publique d'un job. Ne touche JAMAIS la table `offres`.
+
+    C'est ce qui rend la lecture insensible aux orphelins : un job dont
+    l'offre a été fusionnée ou purgée se lit exactement comme les autres.
+    Il n'y a pas de clé étrangère (cf. le commentaire de `jobs.py`), donc
+    pas de jointure à faire — et surtout aucune à faire par mégarde.
+    """
+    termine = job["status"] == "done" and job["pdf_path"]
+    return {
+        "job_id": job["id"],
+        "offer_id": job["offer_id"],
+        "status": job["status"],
+        # `None` dès que le job n'est plus `pending` : il n'attend plus.
+        "position": jobs.position(conn, job["id"]),
+        # Le lien reflète ce que dit la LIGNE, pas le disque : on ne va pas
+        # stat() un fichier à chaque tour de polling. Si le PDF a disparu,
+        # c'est `download` qui le dira, avec son code.
+        "pdf_url": url_for("api_cv_telecharger", job_id=job["id"]) if termine else None,
+        "error_code": job["error_code"],
+        "error_message": job["error"],
+        "attempts": job["attempts"],
+    }
+
+
+# --- Le PDF est-il servable ? ----------------------------------------------
+def _resoudre_pdf(pdf_path: str) -> tuple[Path | None, str | None]:
+    """Rend ``(chemin, motif_de_refus)``. Le refus est ``None`` si tout va bien.
+
+    Le chemin vient de la BASE, donc d'un worker, donc a priori de nous.
+    On le vérifie quand même contre la racine de sortie : « a priori de
+    nous » n'est pas une garantie, et servir un fichier arbitraire du
+    disque parce qu'une ligne de la base le désigne est exactement la
+    faille qu'on ne veut pas offrir à un front qui, au CP4, passera des
+    identifiants de job venus de l'utilisateur.
+
+    ``resolve()`` des DEUX côtés avant comparaison : sans lui, un `..`
+    ou un lien symbolique passerait la comparaison textuelle tout en
+    désignant un fichier hors racine.
+    """
+    racine = Path(config.CV_OUT_ROOT).resolve()
+    chemin = Path(pdf_path).resolve()
+    if not chemin.is_relative_to(racine):
+        return None, "hors_racine"
+    if not chemin.is_file():
+        return None, "absent"
+    return chemin, None
+
+
+# --- Routes ----------------------------------------------------------------
+@app.post("/api/offers/<offer_id>/cv")
+@_json_api
+def api_cv_demander(offer_id: str):
+    """Demande un CV pour une offre. Rend 202 + le job (créé ou réutilisé).
+
+    Idempotent par ``offer_hash`` : deux clics, ou un rafraîchissement de
+    page, rendent le MÊME job. ``reutilise`` dit lequel des deux cas s'est
+    produit — le front en a besoin pour ne pas annoncer « lancé ! » sur une
+    génération qui date d'hier.
+
+    Aucun job n'est créé si l'offre n'est pas générable : un job qu'on sait
+    d'avance voué à échouer ne fait qu'occuper la file et bruiter
+    l'historique. `TEXT_MISSING` est donc refusé ICI, alors que le worker
+    sait aussi le produire — pour l'offre dont le texte disparaît entre
+    l'enfilement et le traitement.
+    """
+    conn = _conn()
+    offre = conn.execute(
+        "SELECT cle, title FROM offres WHERE cle = ?", (offer_id,)
+    ).fetchone()
+    if offre is None:
+        # Même code que celui du worker quand l'offre disparaît en cours de
+        # route : un seul vocabulaire pour une seule situation, vue de deux
+        # endroits. Cf. `worker._traiter_un`.
+        return _erreur("OFFER_NOT_FOUND",
+                       f"aucune offre ne porte la clé « {offer_id} ».", 404)
+
+    texte = jobs.lire_texte(conn, offer_id)
+    if not texte:
+        return _erreur(
+            "TEXT_MISSING",
+            f"le texte de l'offre « {offre['title']} » n'est pas en base : il "
+            f"n'y a rien à envoyer au modèle. Récupérez-le d'abord "
+            f"(python backfill_textes.py --apply).",
+            422,
+        )
+
+    master = Path(config.CV_MASTER_PATH)
+    if not master.is_file():
+        # `MASTER_INVALID` et non `INTERNAL_ERROR`, contrairement à ce que
+        # fait cv_forge pour un master illisible. Le cas n'est pas le même :
+        # ici on n'a rien tenté, on CONSTATE que `config.CV_MASTER_PATH` ne
+        # désigne aucun fichier. C'est un défaut de configuration, dont
+        # l'utilisateur peut faire quelque chose. « Erreur interne »
+        # l'enverrait lire une pile pour une ligne de `config.py`.
+        return _erreur("MASTER_INVALID",
+                       f"master introuvable : {master}. Vérifiez "
+                       f"`CV_MASTER_PATH` dans config.py.", 503)
+
+    from cv_forge import ForgeConfig
+
+    empreinte = jobs.calculer_hash(texte, master_path=master, config=ForgeConfig())
+    job, reutilise = jobs.enfiler(conn, offer_id, empreinte)
+    return jsonify({**_vue_job(conn, job), "reutilise": reutilise}), 202
+
+
+@app.get("/api/jobs/<int:job_id>")
+@_json_api
+def api_cv_job(job_id: int):
+    """État d'un job. Ne lève jamais, même si l'offre a disparu."""
+    job = jobs.lire(_conn(), job_id)
+    if job is None:
+        return _erreur("JOB_NOT_FOUND", f"aucun job n°{job_id}.", 404)
+    return jsonify(_vue_job(_conn(), job))
+
+
+@app.get("/api/offers/<offer_id>/cv/latest")
+@_json_api
+def api_cv_dernier(offer_id: str):
+    """Dernière génération connue pour une offre, quel que soit son statut.
+
+    C'est ce que la liste d'offres du CP4 interrogera au chargement, pour
+    savoir s'il faut afficher « Générer », « en cours » ou « Télécharger ».
+
+    404 quand l'offre n'a jamais rien produit — y compris quand l'offre
+    elle-même n'existe pas : les deux se répondent pareil, et surtout
+    aucune des deux ne lève. On ne consulte pas `offres` du tout.
+    """
+    job = jobs.dernier_pour_offre(_conn(), offer_id)
+    if job is None:
+        return _erreur("JOB_NOT_FOUND",
+                       f"aucune génération connue pour l'offre « {offer_id} ».", 404)
+    return jsonify(_vue_job(_conn(), job))
+
+
+@app.get("/api/jobs/<int:job_id>/download")
+@_json_api
+def api_cv_telecharger(job_id: int):
+    """Sert le PDF d'un job terminé, en pièce jointe."""
+    job = jobs.lire(_conn(), job_id)
+    if job is None:
+        return _erreur("JOB_NOT_FOUND", f"aucun job n°{job_id}.", 404)
+
+    if job["status"] == "failed":
+        # On RÉPERCUTE le code du job plutôt que d'en inventer un : celui
+        # qui demande le PDF d'une génération ratée veut savoir pourquoi
+        # elle a raté, pas s'entendre dire qu'il n'y a pas de fichier.
+        return _erreur(job["error_code"] or "INTERNAL_ERROR",
+                       job["error"] or "génération en échec, sans message.", 409)
+    if job["status"] != "done":
+        return _erreur("PDF_UNAVAILABLE",
+                       f"génération {job['status']} : le PDF n'existe pas encore.",
+                       409)
+    if not job["pdf_path"]:
+        return _erreur("PDF_UNAVAILABLE",
+                       "job terminé mais aucun chemin de PDF enregistré.", 404)
+
+    chemin, refus = _resoudre_pdf(job["pdf_path"])
+    if refus == "hors_racine":
+        logger.warning("Job %s : chemin de PDF hors de la racine de sortie (%s). "
+                       "Refus de servir.", job_id, job["pdf_path"])
+        return _erreur("PDF_UNAVAILABLE",
+                       "le chemin enregistré sort de la racine des CV produits : "
+                       "refus de servir ce fichier.", 403)
+    if refus == "absent":
+        # État RÉEL et pas une impossibilité : le dossier de sortie a pu
+        # être vidé, ou le PDF déplacé, longtemps après la génération.
+        return _erreur("PDF_UNAVAILABLE",
+                       f"le job est terminé mais le fichier a disparu du disque "
+                       f"({job['pdf_path']}). Relancez une génération.", 404)
+
+    return send_file(chemin, as_attachment=True, download_name=chemin.name,
+                     mimetype="application/pdf")
 
 
 # ---------------------------------------------------------------------------
@@ -913,9 +1192,47 @@ def _demarrer_logs() -> None:
 # cette constante et resterait correct si elle repassait à True.
 UTILISER_RELOADER = False
 
+# Le worker de génération, s'il tourne dans CE processus. Module-level et non
+# local à `__main__` pour que les tests puissent constater qu'un second
+# démarrage n'en crée pas un deuxième.
+WORKER: worker_module.Worker | None = None
+
+
+def demarrer_worker(*, reloader_actif: bool | None = None):
+    """Démarre le worker de génération avec l'app. Rend l'instance, ou None.
+
+    Trois refus possibles, dans cet ordre :
+
+    1. **Ce processus n'est pas le bon.** Sous le reloader de Werkzeug, le
+       superviseur ne doit pas porter de worker — il en existerait deux, dans
+       deux interpréteurs qui ne se voient pas, donc deux générations Ollama
+       simultanées. `worker_autorise` tranche, à partir du drapeau qu'on
+       passe réellement à `app.run()` et non d'une devinette.
+    2. **Un worker de ce processus tourne déjà** : on rend le même.
+    3. `Worker.demarrer()` refuse à son tour si son thread est vivant.
+
+    Appelée UNIQUEMENT depuis `__main__` : importer `app` (ce que font les
+    tests) ne doit pas lancer de thread ni ouvrir la vraie base.
+    """
+    global WORKER
+    reloader = UTILISER_RELOADER if reloader_actif is None else reloader_actif
+    if not worker_module.worker_autorise(reloader_actif=reloader):
+        logger.info("Worker de génération non démarré : ce processus est le "
+                    "superviseur du reloader, pas celui qui sert.")
+        return None
+    if WORKER is not None and WORKER.actif:
+        logger.warning("Worker de génération déjà en cours : démarrage ignoré.")
+        return WORKER
+    WORKER = worker_module.Worker()
+    WORKER.demarrer()
+    logger.info("Worker de génération de CV démarré (file SQLite, 1 job à la fois).")
+    return WORKER
+
+
 if __name__ == "__main__":
     _demarrer_logs()
     _charger_cache()
+    demarrer_worker()
     logger.info("Stage Finder web : http://localhost:5000  (Ctrl+C pour arrêter)")
     app.run(host="127.0.0.1", port=5000, threaded=True,
             use_reloader=UTILISER_RELOADER)
