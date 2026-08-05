@@ -1,0 +1,32 @@
+[
+  {
+    "id": 658812,
+    "slug": "stage-machine-learning-6-mois",
+    "title": "Stage Machine Learning (6 mois)",
+    "description": "<p>Ta mission : entraîner des modèles.<br />Stack Python &amp; PyTorch.</p>",
+    "url": null,
+    "applicationUrl": null,
+    "publishedAt": "2026-08-01T13:52:13+02:00",
+    "createdAt": "2026-08-01T13:50:27+02:00",
+    "contracts": ["internship"],
+    "job": {"nameForContributionSlug": "data-scientist"},
+    "company": {"name": "Zenith"},
+    "location": {"label": "Paris, France", "adminLevel1": "Île-de-France"},
+    "minAnnualSalary": 18000,
+    "maxAnnualSalary": 22000
+  },
+  {
+    "id": 658813,
+    "slug": "stagiaire-cybersecurite",
+    "title": "Stagiaire Cybersécurité",
+    "description": "SOC et détection d'intrusion.",
+    "applicationUrl": "https://carriere.example/stage-cyber",
+    "createdAt": "2026-07-27T11:29:17+02:00",
+    "contracts": ["internship"],
+    "job": {},
+    "company": {},
+    "location": {"adminLevel1": "Île-de-France"},
+    "minAnnualSalary": null,
+    "maxAnnualSalary": null
+  }
+]

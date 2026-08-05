@@ -1,0 +1,20 @@
+[
+  {
+    "title": "Stagiaire Data Science",
+    "company": "Gamma",
+    "location": "Paris",
+    "snippet": "Analyse de données, deep learning. Stage 6 mois.",
+    "link": "https://jooble.example/1",
+    "updated": "2027-01-05",
+    "salary": "1300 €"
+  },
+  {
+    "title": "Internship AI Security",
+    "company": "Delta",
+    "location": "Paris, TX",
+    "snippet": "Security of AI systems, adversarial ML.",
+    "link": "https://jooble.example/2",
+    "updated": "2027-01-03",
+    "salary": ""
+  }
+]

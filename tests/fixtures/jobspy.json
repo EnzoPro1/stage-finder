@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Stage Machine Learning Engineer",
+    "company": "Epsilon",
+    "location": "Boulogne-Billancourt",
+    "description": "MLOps, PyTorch, RAG. Stage de 6 mois.",
+    "job_url": "https://jobspy.example/1",
+    "site": "indeed",
+    "date_posted": "2027-01-05",
+    "min_amount": 1400,
+    "max_amount": 1800,
+    "currency": "EUR"
+  },
+  {
+    "title": "Alternance Développeur",
+    "company": "Zeta",
+    "location": "Paris",
+    "description": "Contrat en alternance 12 mois.",
+    "job_url": "https://jobspy.example/2",
+    "site": "linkedin",
+    "date_posted": "2027-01-02",
+    "min_amount": null,
+    "max_amount": null,
+    "currency": null
+  }
+]

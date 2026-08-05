@@ -1,0 +1,31 @@
+# --- Dépendances du projet job-finder ---
+# Installe avec : pip install -r requirements.txt
+
+# Requêtes HTTP vers les API (Adzuna, Jooble)
+requests>=2.31
+
+# Utilise le magasin de certificats de l'OS (Windows) pour la vérification TLS.
+# Indispensable derrière un antivirus/proxy qui intercepte le SSL.
+truststore>=0.9
+
+# Chargement du fichier .env (clés API)
+python-dotenv>=1.0
+
+# Scraping Indeed / LinkedIn / Google Jobs
+python-jobspy>=1.1.80
+
+# Ranking sémantique local (embeddings multilingues)
+# torch est tiré automatiquement par sentence-transformers.
+sentence-transformers>=3.0
+
+# Manipulation de données pour l'export CSV (jobspy renvoie déjà des DataFrames)
+pandas>=2.0
+
+# Validation de la configuration au démarrage (config_schema.py)
+pydantic>=2.0
+
+# App web locale interactive (app.py) : liste instantanée + vérif IA à la demande.
+flask>=3.0
+
+# Suite de tests (pytest + fixtures) — dépendance de développement.
+pytest>=8.0

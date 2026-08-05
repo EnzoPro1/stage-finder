@@ -1,0 +1,22 @@
+[
+  {
+    "title": "Stage Intelligence Artificielle (H/F)",
+    "company": {"display_name": "ACME"},
+    "location": {"display_name": "Paris, Île-de-France"},
+    "description": "Stage de 6 mois en machine learning et LLM, à partir de janvier 2027.",
+    "redirect_url": "https://adzuna.example/1",
+    "created": "2027-01-05T09:00:00Z",
+    "salary_min": 1200,
+    "salary_max": 1500
+  },
+  {
+    "title": "Stage Cybersécurité",
+    "company": {"display_name": "BetaCorp"},
+    "location": {"display_name": "La Défense, Hauts-de-Seine"},
+    "description": "Pentest, SIEM, SOC. Stage 6 mois.",
+    "redirect_url": "https://adzuna.example/2",
+    "created": "2027-01-04T09:00:00Z",
+    "salary_min": null,
+    "salary_max": null
+  }
+]

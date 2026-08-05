@@ -1,0 +1,20 @@
+[
+  {
+    "intitule": "Stage Ingénieur IA / Cybersécurité",
+    "entreprise": {"nom": "Eta"},
+    "lieuTravail": {"libelle": "Paris (75)"},
+    "description": "IA appliquée à la détection d'intrusion, MLSecOps. Stage de 6 mois à partir de janvier 2027.",
+    "origineOffre": {"urlOrigine": "https://francetravail.example/1"},
+    "dateCreation": "2027-01-05T10:00:00.000Z",
+    "salaire": {"libelle": "Selon profil"}
+  },
+  {
+    "intitule": "Stage Développement Web",
+    "entreprise": {"nom": "Theta"},
+    "lieuTravail": {"libelle": "Nanterre (92)"},
+    "description": "Intégration front-end React.",
+    "origineOffre": {"urlOrigine": "https://francetravail.example/2"},
+    "dateCreation": "2027-01-04T10:00:00.000Z",
+    "salaire": {}
+  }
+]

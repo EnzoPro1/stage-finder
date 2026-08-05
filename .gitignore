@@ -1,0 +1,17 @@
+# Secrets — NE JAMAIS committer
+.env
+windows-ca-bundle.pem
+
+# Environnement virtuel
+.venv/
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Sorties générées
+stages.csv
+stages.html
+
+# Cache modèles HuggingFace (si local au projet)
+.cache/
