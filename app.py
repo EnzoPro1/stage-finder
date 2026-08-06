@@ -42,6 +42,7 @@ import market
 import storage
 import verifier
 import worker as worker_module
+from dedup import _cle as cle_identite
 from normalize import Offre
 from sources import RedactingFilter
 
@@ -142,6 +143,15 @@ def _row(offre: Offre, cos_score: float, cos_rang: int, inclure_desc: bool = Fal
     verdict = getattr(offre, "verdict", None)
     ia_score = ETAT["ia_score"].get(h)
     row = {
+        # AJOUT du CP4, rien d'autre ne bouge dans cette fonction. Sans la
+        # clé, le front ne peut désigner aucune offre : c'est elle que
+        # portent `/api/offers/<id>/cv` et `/api/cv/states`.
+        #
+        # `dedup._cle` et non `storage.hash_offre` : la première EST la
+        # clé primaire de `offres`, la seconde est une empreinte de
+        # contenu qui sert au cache des verdicts. Les confondre donnerait
+        # un identifiant qui ne désigne aucune ligne.
+        "cle": cle_identite(offre),
         "cos_rang": cos_rang,
         "cos_score": round(cos_score, 3),
         "ia_rang": ETAT["ia_rang"].get(h),
@@ -623,6 +633,60 @@ def api_cv_dernier(offer_id: str):
     return jsonify(_vue_job(_conn(), job))
 
 
+@app.get("/api/cv/states")
+@_json_api
+def api_cv_etats():
+    """État de génération de TOUTES les offres, en une seule réponse.
+
+    Le CP3 n'exposait que la lecture unitaire (``/cv/latest``). Avec 294
+    offres à l'écran, la liste aurait fait 294 requêtes au chargement puis
+    294 par tour de polling. Cette route est l'ajout que le CP4 réclamait.
+
+    Sous ``/api/cv/`` et non ``/api/offers/cv/`` : ce second chemin a le
+    même nombre de segments que ``/api/offers/<offer_id>/cv`` et n'aurait
+    tenu que par la valeur littérale du dernier segment. Une route dont la
+    correction dépend de ce qu'un identifiant d'offre ne vaudra jamais
+    « cv » est une route qui attend son incident.
+
+    Ne sont renvoyées que les offres dont l'état N'EST PAS ``idle`` :
+    l'absence d'entrée VEUT DIRE ``idle``. Sur 294 offres dont la plupart
+    n'ont jamais été générées, envoyer les 294 gonflerait la réponse pour
+    n'apprendre que du vide — et ``/api/etat`` a déjà montré qu'une charge
+    JSON trop grosse fait couper Werkzeug sous Windows.
+    """
+    conn = _conn()
+    derniers = jobs.derniers_par_offre(conn)
+    positions = jobs.positions_pending(conn)
+    avec_texte = jobs.cles_avec_texte(conn)
+
+    etats: dict[str, dict] = {}
+    for offer_id, job in derniers.items():
+        etats[offer_id] = {
+            "job_id": job["id"],
+            "status": job["status"],
+            "position": positions.get(job["id"]),
+            "pdf_url": (url_for("api_cv_telecharger", job_id=job["id"])
+                        if job["status"] == "done" and job["pdf_path"] else None),
+            "error_code": job["error_code"],
+            "error_message": job["error"],
+            "attempts": job["attempts"],
+        }
+
+    # `text_missing` n'est pas un statut de job — aucun job n'existe dans
+    # ce cas, le POST le refuse. C'est un état de l'OFFRE, calculé ici.
+    # Un job existant l'emporte : il décrit quelque chose qui a vraiment
+    # eu lieu, alors que l'absence de texte est une disponibilité.
+    for ligne in conn.execute("SELECT cle FROM offres"):
+        cle = ligne["cle"]
+        if cle not in etats and cle not in avec_texte:
+            etats[cle] = {"job_id": None, "status": "text_missing",
+                          "position": None, "pdf_url": None,
+                          "error_code": "TEXT_MISSING", "error_message": None,
+                          "attempts": 0}
+
+    return jsonify({"etats": etats})
+
+
 @app.get("/api/jobs/<int:job_id>/download")
 @_json_api
 def api_cv_telecharger(job_id: int):
@@ -747,6 +811,23 @@ PAGE = r"""<!doctype html>
   .an-vide { color: #888; font-size: .85rem; font-style: italic; }
   .src { background: #eef; color: #334; padding: .05rem .4rem; border-radius: 4px; font-size: .72rem; }
   .vide { text-align: center; color: #999; padding: 2rem; }
+  /* --- Colonne « CV » (CP4) -------------------------------------------- */
+  td.cv { white-space: nowrap; }
+  .cv button { font-size: .72rem; padding: .22rem .55rem; font-weight: 700; }
+  .cv-generer   { background: #1d4ed8; color: #fff; }
+  .cv-attente   { background: #e5e7eb; color: #4b5563; }
+  .cv-encours   { background: #ede9fe; color: #6d28d9; }
+  .cv-pret      { background: #16a34a; color: #fff; }
+  .cv-echec     { background: #fee2e2; color: #b91c1c; }
+  .cv-sans-texte{ background: #f3f4f6; color: #9ca3af; }
+  .cv-second    { background: transparent; color: #6b7280; text-decoration: underline;
+                  font-weight: 600; padding: .2rem .3rem; }
+  .cv-msg { display: block; margin-top: .25rem; font-size: .7rem; color: #b91c1c;
+            max-width: 15rem; white-space: normal; line-height: 1.35; }
+  /* Point clignotant pendant la génération : un CV prend plusieurs minutes,
+     il faut que la page dise qu'elle n'est pas figée. */
+  .cv-pouls::before { content: "●"; margin-right: .3rem; animation: pouls 1.2s infinite; }
+  @keyframes pouls { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
   /* --- Panneau « état du marché » ------------------------------------- */
   .marche { background: #fff; border-radius: 8px; padding: .8rem 1rem; margin-bottom: 1rem;
             box-shadow: 0 1px 3px rgba(0,0,0,.08); }
@@ -818,11 +899,13 @@ PAGE = r"""<!doctype html>
         <th>Durée</th>
         <th>Début</th>
         <th>Source</th>
+        <th title="Génère un CV adapté à cette offre avec ton master.yaml">CV</th>
       </tr>
     </thead>
-    <tbody id="corps"><tr><td colspan="9" class="vide">Chargement…</td></tr></tbody>
+    <tbody id="corps"><tr><td colspan="10" class="vide">Chargement…</td></tr></tbody>
   </table>
 
+<script src="/static/cv_etats.js"></script>
 <script>
 let ETAT = null;
 let TRI = "cos";            // "cos" ou "ia"
@@ -949,7 +1032,7 @@ function panneauAnalyse(o){
     ? `<div class="an-drapeaux"><strong>🚩 Points de vigilance</strong><ul>`
       + v.drapeaux_rouges.map(d => `<li>${esc(d)}</li>`).join("") + `</ul></div>`
     : "";
-  return `<tr class="analyse"><td colspan="9">
+  return `<tr class="analyse"><td colspan="10">
     <div class="an-titre">🤖 Analyse du LLM<span class="an-meta">${meta}</span></div>
     ${texte}${drapeaux}
   </td></tr>`;
@@ -966,6 +1049,125 @@ function basculerTout(ouvrir){
   if (ouvrir && ETAT) ETAT.offres.filter(o => o.verdict).forEach(o => DEPLIES.add(o.url));
   rendre();
 }
+
+// ===========================================================================
+// Génération de CV (CP4) — colonne « CV »
+//
+// La DÉCISION (quel bouton pour quel état) vit dans /static/cv_etats.js,
+// testé par `node --test`. Ici il ne reste que le rendu et le réseau : une
+// machine à états enfermée dans cette chaîne Python ne serait pas testable.
+// ===========================================================================
+let ETATS_CV = {};            // cle d'offre -> entrée de /api/cv/states
+let sondeCV = null;           // handle du setTimeout récursif (UN SEUL cycle)
+const cvEnVol = new Set();    // POST en cours : verrou anti double-clic
+const DELAI_CV = 1500;
+
+function etatCV(cle){
+  try { return CvEtats.etatDepuis(ETATS_CV[cle]); }
+  catch (err){ console.error("CV: état illisible pour", cle, err); return "idle"; }
+}
+
+function celluleCV(o){
+  let vue;
+  try { vue = CvEtats.vueBouton(etatCV(o.cle), ETATS_CV[o.cle] || {}); }
+  catch (err){
+    // `vueBouton` lève sur un état non géré — c'est voulu, ça signale un
+    // bug. Mais une ligne fautive ne doit pas vider le tableau entier.
+    console.error("CV:", err);
+    return '<td class="cv"><span class="cv-msg">état inattendu</span></td>';
+  }
+  const cle = encodeURIComponent(o.cle);
+  const pouls = vue.occupe ? " cv-pouls" : "";
+  let h = `<button class="${vue.classe}${pouls}"${vue.actif?"":" disabled"}`
+        + ` title="${esc(vue.titre)}"`
+        + ` onclick="actionCV('${cle}','${vue.action}')">${esc(vue.libelle)}</button>`;
+  if (vue.secondaire)
+    h += ` <button class="cv-second" title="Relancer une génération"`
+       + ` onclick="actionCV('${cle}','${vue.secondaire.action}')">`
+       + `${esc(vue.secondaire.libelle)}</button>`;
+  if (vue.message) h += `<span class="cv-msg">${esc(vue.message)}</span>`;
+  // `data-cle` : `rendre()` remplace tout le innerHTML, donc une référence
+  // DOM gardée d'un rendu à l'autre pointe un nœud détaché. C'est le seul
+  // moyen de retrouver la cellule d'une offre après un re-rendu — pour
+  // l'inspection comme pour le débogage.
+  return `<td class="cv" data-cle="${esc(o.cle)}">${h}</td>`;
+}
+
+function actionCV(cleEncodee, action){
+  const cle = decodeURIComponent(cleEncodee);
+  if (action === "telecharger"){
+    const entree = ETATS_CV[cle];
+    if (entree && entree.pdf_url) window.location.href = entree.pdf_url;
+    return;
+  }
+  if (action === "generer") genererCV(cle);
+}
+
+async function genererCV(cle){
+  // Le bouton est déjà désactivé par le rendu optimiste, mais un double
+  // clic peut passer AVANT le repaint. Le POST est idempotent de toute
+  // façon : ce verrou évite juste deux requêtes pour rien.
+  if (cvEnVol.has(cle)) return;
+  cvEnVol.add(cle);
+
+  const avant = ETATS_CV[cle];           // mémorisé pour le rollback
+  ETATS_CV[cle] = {job_id: null, status: "pending", position: null,
+                   pdf_url: null, error_code: null, error_message: null,
+                   attempts: 0};
+  rendre();                              // optimiste : le bouton se fige tout de suite
+
+  const rollback = () => {
+    if (avant === undefined) delete ETATS_CV[cle]; else ETATS_CV[cle] = avant;
+    rendre();
+  };
+
+  try {
+    const r = await fetch(`/api/offers/${encodeURIComponent(cle)}/cv`,
+                          {method: "POST", headers: {"Content-Type": "application/json"}});
+    const d = await r.json();
+    if (!r.ok){ rollback(); alert(CvEtats.messageErreur(d.error_code)); return; }
+    ETATS_CV[cle] = {job_id: d.job_id, status: d.status, position: d.position,
+                     pdf_url: d.pdf_url, error_code: d.error_code,
+                     error_message: d.error_message, attempts: d.attempts};
+    rendre();
+  } catch (err){
+    rollback();
+    alert("Le serveur n'a pas répondu. Réessaie.");
+  } finally {
+    cvEnVol.delete(cle);
+  }
+}
+
+async function chargerEtatsCV(){
+  try {
+    const r = await fetch("/api/cv/states", {cache: "no-store"});
+    if (!r.ok) return;
+    ETATS_CV = (await r.json()).etats || {};
+  } catch (err){ /* réseau coupé : on garde le dernier état connu */ }
+}
+
+// --- Polling : UN seul cycle, récursif, et seulement s'il y a de quoi -----
+// `setTimeout` récursif et jamais `setInterval` : avec un intervalle, un
+// tour lent s'empile sur le suivant et la page finit par lancer plusieurs
+// requêtes en parallèle sur une base que le worker écrit déjà.
+function arreterSondeCV(){
+  if (sondeCV){ clearTimeout(sondeCV); sondeCV = null; }
+}
+
+function relancerSondeCV(){
+  arreterSondeCV();                       // idempotent : jamais deux cycles
+  // Sur les offres RÉELLEMENT AFFICHÉES : un filtre qui masque la seule
+  // génération en cours doit arrêter le polling.
+  const visibles = (window.__offresAffichees || []).map(o => etatCV(o.cle));
+  if (!CvEtats.doitSonder(visibles)) return;
+  sondeCV = setTimeout(async () => {
+    sondeCV = null;
+    await chargerEtatsCV();
+    rendre();                             // ré-arme via la fin de `rendre`
+  }, DELAI_CV);
+}
+
+window.addEventListener("beforeunload", arreterSondeCV);
 
 function ligne(o){
   const badges = (o.tags||[]).map(t =>
@@ -984,6 +1186,7 @@ function ligne(o){
     <td>${o.duree_mois?o.duree_mois+' mois':'—'}</td>
     <td>${esc(o.date_debut)||'—'}</td>
     <td><span class="src">${esc(o.source)}</span></td>
+    ${celluleCV(o)}
   </tr>` + panneauAnalyse(o);
 }
 
@@ -1007,10 +1210,20 @@ function rendre(){
   if (q) offres = offres.filter(o =>
      (o.title+" "+o.company+" "+o.location+" "+o.source).toLowerCase().includes(q));
 
+  // Mémorisé AVANT le rendu : c'est cette liste — les offres réellement
+  // à l'écran, filtre appliqué — qui décide si le polling doit tourner.
+  window.__offresAffichees = offres;
+
   const corps = document.getElementById("corps");
   corps.innerHTML = offres.length
     ? offres.map(ligne).join("")
-    : `<tr><td colspan="9" class="vide">${ETAT.n_total?"Aucune offre ne correspond au filtre.":"Aucun classement — clique « 🚀 Tout lancer »."}</td></tr>`;
+    : `<tr><td colspan="10" class="vide">${ETAT.n_total?"Aucune offre ne correspond au filtre.":"Aucun classement — clique « 🚀 Tout lancer »."}</td></tr>`;
+
+  // Seul point de ré-armement du polling CV. `rendre` est appelé après
+  // CHAQUE changement d'affichage — filtre, tri, retour de POST, tour de
+  // sonde — donc l'arrêt sur état terminal et l'arrêt sur filtre passent
+  // tous les deux par ici, sans surveillance séparée.
+  relancerSondeCV();
 }
 
 async function lancerVerif(){
@@ -1162,7 +1375,10 @@ async function toutLancer(){
 }
 
 document.getElementById("n").addEventListener("input", e => { e.target.dataset.touched = "1"; });
-charger();
+
+// L'état CV de TOUTES les offres en UN appel, avant le premier rendu :
+// une requête par ligne ferait 294 allers-retours à l'ouverture.
+chargerEtatsCV().then(charger);
 // Au chargement : on affiche le tableau de bord SI le serveur l'a déjà en
 // cache. Sans force=1, l'appel est instantané et ne consomme aucun quota.
 chargerMarche(false);

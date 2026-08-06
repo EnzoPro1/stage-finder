@@ -40,6 +40,7 @@ import embeddings_env
 import jobs
 import ollama_pool
 import storage
+import titre_offre
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,17 @@ class Worker:
 
         entree = OfferInput(
             offer_id=offre["cle"],
-            title=offre["title"] or "",
+            # Nettoyé ICI et nulle part ailleurs. `cv_forge` se sert de ce
+            # champ comme REPLI quand l'extraction ne trouve pas
+            # d'intitulé — le titre part alors en tête de CV. « Stage
+            # Consultant IA & Data - 6 mois H/F » y annoncerait « H/F » au
+            # recruteur. Le repli, c'est « la fiche de l'appelant » : à
+            # l'appelant de la rendre présentable.
+            #
+            # La table `offres` n'est PAS modifiée : la liste affiche
+            # toujours le titre de l'annonce, et les clés de dédup —
+            # calculées sur `title` par `dedup._cle` — ne bougent pas.
+            title=titre_offre.nettoyer(offre["title"]),
             company=offre["company"] or "",
             raw_text=texte,
             url=offre["url"],

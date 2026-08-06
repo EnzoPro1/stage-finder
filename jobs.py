@@ -224,6 +224,42 @@ def position(conn: sqlite3.Connection, job_id: int) -> int | None:
     return devant + 1
 
 
+def derniers_par_offre(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Dernier job de CHAQUE offre, en une seule requête.
+
+    L'interface affiche 294 lignes : les interroger une par une ferait 294
+    requêtes à chaque tour de polling, toutes les 1,5 s. Le même classement
+    que ``dernier_pour_offre`` (``created_at DESC, id DESC``) est appliqué
+    par partition, pour que la lecture groupée et la lecture unitaire ne
+    puissent pas diverger.
+    """
+    lignes = conn.execute(
+        """SELECT * FROM (
+               SELECT *, ROW_NUMBER() OVER (
+                   PARTITION BY offer_id ORDER BY created_at DESC, id DESC
+               ) AS rang
+               FROM generation_jobs
+           ) WHERE rang = 1"""
+    )
+    return {l["offer_id"]: dict(l) for l in lignes}
+
+
+def positions_pending(conn: sqlite3.Connection) -> dict[int, int]:
+    """``job_id -> rang dans la file``, pour tous les `pending` d'un coup.
+
+    Même ordre que ``position()`` — ``(created_at, id)`` — et même origine
+    à 1. Un test compare les deux sur la même file : deux implémentations
+    du rang qui divergeraient afficheraient un tour de passage faux.
+    """
+    return {
+        l["id"]: l["rang"]
+        for l in conn.execute(
+            """SELECT id, ROW_NUMBER() OVER (ORDER BY created_at, id) AS rang
+               FROM generation_jobs WHERE status = 'pending'"""
+        )
+    }
+
+
 def en_attente(conn: sqlite3.Connection) -> int:
     n, = conn.execute(
         "SELECT COUNT(*) FROM generation_jobs WHERE status IN ('pending','running')"
