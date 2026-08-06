@@ -18,7 +18,12 @@ stages.html
 # clone. Ces motifs vivaient dans `.git/info/exclude`, qui n'est NI versionné
 # NI cloné — il ne protégeait donc que cette copie de travail.
 stages.db
-stages.avant-recalc-*.db
+# `avant-*` et non `avant-recalc-*` : le motif étroit ne couvrait que les
+# sauvegardes de la migration des clés. La première sauvegarde nommée
+# autrement (`stages.avant-replis-*.db`) est passée à travers et se serait
+# retrouvée dans un commit. Toute sauvegarde de la base est ignorée, quel
+# que soit le motif qui l'a produite.
+stages.avant-*.db
 .rank_cache.json
 .rome_cache.json
 .pytest_cache/
