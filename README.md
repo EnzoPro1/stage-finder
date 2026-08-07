@@ -366,6 +366,76 @@ IA »**, ou la case *déplier les analyses IA* pour tout ouvrir) : elle s'affich
 **sur toute la largeur**, en taille de lecture — avant, elle était compressée
 dans une colonne étroite et rognée à trois lignes.
 
+---
+
+## 📄 Générer un CV pour une offre
+
+Chaque ligne de la liste porte un bouton **« Générer CV »**. Une génération coûte
+des minutes et monopolise Ollama : elle ne se fait donc pas dans le fil d'une
+requête HTTP. Le clic **enfile un job**, un **worker unique** le consomme, et la
+page suit l'avancement (`idle → pending → running → done`).
+
+Le pipeline lui-même vit dans **[cv_forge](../cv_forge)**, appelé par sa seule
+fonction publique `generate_cv`. La dépendance est strictement
+`stage_finder → cv_forge` : `cv_forge` ne connaît ni `stages.db`, ni la file.
+
+### En ligne de commande — `cv_cli.py`
+
+Tout ce que fait le bouton se pilote sans Flask, **par le même code** :
+
+```powershell
+python cv_cli.py etat                    # la file + la couverture en texte
+python cv_cli.py sans-texte              # ce qui bloque, et ce qui est récupérable
+python cv_cli.py enfiler <cle|préfixe>   # demande un CV pour UNE offre
+python cv_cli.py batch                   # les mieux classées, puis consomme
+python cv_cli.py travailler              # worker continu (Ctrl+C)
+python cv_cli.py travailler --une-passe  # vide la file puis rend la main
+python cv_cli.py orphelins --purger      # jobs dont l'offre a disparu
+```
+
+#### `batch` — la fournée
+
+```powershell
+python cv_cli.py batch --limite 12          # défaut : les 12 mieux classées
+python cv_cli.py batch --enfiler-seulement  # enfile sans consommer
+```
+
+Il **n'appelle ni `generate_cv` ni `cv_forge`** : il pose des lignes dans la file
+avec le même point d'entrée que le bouton, puis consomme avec le même worker.
+L'idempotence lui vient donc gratuitement — une offre déjà générée sous le même
+`offer_hash` (texte + empreinte du master + version de config) retrouve son job
+et **n'est pas régénérée**.
+
+**Qui porte le worker ?** Le batch *tente* de prendre le verrou de worker et se
+règle sur le résultat :
+
+| Situation | Ce qui se passe |
+|---|---|
+| L'app web ne tourne pas | Le batch prend le verrou, **consomme lui-même**, décharge le modèle à la vidange. |
+| L'app web tourne | Le verrou est déjà pris : le batch **enfile et s'arrête**. L'autre worker traitera. |
+
+La décision se prend à l'exécution, d'après ce qui tourne. Le verrou est une
+transaction `BEGIN EXCLUSIVE` tenue ouverte sur `stages.db.worker-lock` : il est
+relâché par l'OS à la mort du processus, donc un worker tué ne laisse rien
+derrière lui. Ollama local ne supporte pas deux générations concurrentes.
+
+#### `sans-texte` — pourquoi un bouton peut être grisé
+
+Le CV se construit à partir du **texte brut de l'annonce**, stocké dans
+`offres_texte`. Ce texte est persisté **au scrape** : toute offre revue en ligne
+repart avec le sien. Une offre qui a disparu des sources, elle, garde une ligne
+dans `offres` mais plus de texte récupérable — son bouton reste `TEXT_MISSING`.
+
+```powershell
+python cv_cli.py sans-texte          # les 25 premières
+python cv_cli.py sans-texte --tout   # la liste complète
+```
+
+La sortie sépare le **récupérable** (revu au dernier run → pourvu au prochain
+scrape) du **perdu** (plus revu depuis : son texte n'existe plus nulle part).
+La commande **ne supprime rien** : une annonce republiée à l'identique se
+rattache toute seule à sa ligne, la clé étant dérivée du contenu.
+
 ### Tester une source isolément
 ```powershell
 python -m sources.adzuna
@@ -425,6 +495,12 @@ job-finder/
 ├── market.py               # indicateurs « le marché est-il favorable ? »
 ├── main.py                 # orchestrateur du pipeline (collecte parallélisée)
 ├── app.py                  # app web locale (Flask) : « Tout lancer », analyses IA
+├── jobs.py                 # file de génération de CV + texte des offres
+├── worker.py               # consommateur UNIQUE de la file (verrou inter-processus)
+├── ollama_pool.py          # jeton d'appel LLM + déchargement du modèle
+├── titre_offre.py          # nettoyage du titre pour l'en-tête du CV
+├── cv_cli.py               # pilotage de la file sans Flask (batch, sans-texte…)
+├── static/cv_etats.js      # machine à états du bouton « Générer CV »
 ├── labels.example.json     # jeu labellisé d'exemple pour l'évaluation
 ├── tests/                  # suite pytest + fixtures JSON par source
 └── README.md
@@ -433,6 +509,10 @@ job-finder/
 > `filters.py`, `extract.py`, `storage.py`, `report.py`, `evaluation.py` isolent
 > chaque responsabilité pour garder `main.py` mince et chaque brique testable
 > seule.
+>
+> Côté CV, `jobs.py` ne connaît QUE la file — ni `cv_forge`, ni Flask, ni le
+> worker — et `worker.py` est le seul module à importer `cv_forge`, dont il ne
+> touche qu'une fonction : `generate_cv`.
 
 ---
 

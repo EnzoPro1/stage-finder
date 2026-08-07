@@ -254,3 +254,94 @@ def test_le_batch_passe_par_jobs_demander(base, monkeypatch):
 
     cv_cli.cmd_batch(_args(base))
     assert sorted(vus) == ["cle-a", "cle-b"]
+
+
+# =====================================================================
+# `cv_cli sans-texte` — l'inventaire de ce qui bloque
+#
+# Le texte ne se récupère qu'en revoyant l'offre EN LIGNE : rien ne le
+# reconstruit hors ligne. La date de dernier run est donc la seule
+# colonne qui décide, et la commande ne fait que lire.
+# =====================================================================
+def _args_sans_texte(base, **kw):
+    kw.setdefault("db", base.chemin)
+    kw.setdefault("limite", 25)
+    kw.setdefault("tout", False)
+    return SimpleNamespace(**kw)
+
+
+def _vue(conn, cle, jour):
+    conn.execute("UPDATE offres SET derniere_vue = ? WHERE cle = ?", (jour, cle))
+    conn.commit()
+
+
+def test_sans_texte_separe_le_recuperable_du_perdu(base, capsys):
+    """La coupure est le DERNIER RUN, pas la date du jour.
+
+    Sans scrape depuis une semaine, se référer à aujourd'hui déclarerait
+    tout périmé alors que rien n'a été retenté.
+    """
+    _offre(base.conn, "fraiche", texte=None)
+    _vue(base.conn, "fraiche", "2026-08-04")
+    _offre(base.conn, "vieille", texte=None)
+    _vue(base.conn, "vieille", "2026-07-14")
+    _offre(base.conn, "pourvue", texte="Un texte bien réel.")
+    _vue(base.conn, "pourvue", "2026-08-04")
+
+    assert cv_cli.cmd_sans_texte(_args_sans_texte(base)) == 0
+    sortie = capsys.readouterr().out
+    assert "Offres sans texte : 2 sur 3" in sortie
+    assert "récupérables  : 1" in sortie
+    assert "perdues       : 1" in sortie
+
+
+def test_sans_texte_ventile_par_date_de_dernier_run(base, capsys):
+    for i in range(3):
+        _offre(base.conn, f"a{i}", texte=None)
+        _vue(base.conn, f"a{i}", "2026-08-04")
+    _offre(base.conn, "b", texte=None)
+    _vue(base.conn, "b", "2026-07-14")
+
+    cv_cli.cmd_sans_texte(_args_sans_texte(base))
+    sortie = capsys.readouterr().out
+    assert "2026-08-04      3" in sortie
+    assert "2026-07-14      1" in sortie
+
+
+def test_sans_texte_n_efface_rien(base):
+    """Le point le plus important : la commande LIT, et c'est tout.
+
+    Une annonce republiée à l'identique se rattache toute seule à sa
+    ligne — la clé est dérivée du contenu. Purger automatiquement
+    détruirait cet historique pour une absence temporaire.
+    """
+    for i in range(4):
+        _offre(base.conn, f"a{i}", texte=None)
+    _offre(base.conn, "pourvue", texte="Un texte bien réel.")
+
+    cv_cli.cmd_sans_texte(_args_sans_texte(base))
+
+    assert base.conn.execute("SELECT COUNT(*) FROM offres").fetchone()[0] == 5
+    assert base.conn.execute("SELECT COUNT(*) FROM offres_texte").fetchone()[0] == 1
+
+
+def test_sans_texte_tronque_et_le_dit(base, capsys):
+    for i in range(10):
+        _offre(base.conn, f"a{i}", texte=None)
+
+    cv_cli.cmd_sans_texte(_args_sans_texte(base, limite=3))
+    assert "et 7 autre(s)" in capsys.readouterr().out
+
+
+def test_sans_texte_tout_ne_tronque_pas(base, capsys):
+    for i in range(10):
+        _offre(base.conn, f"a{i}", texte=None)
+
+    cv_cli.cmd_sans_texte(_args_sans_texte(base, limite=3, tout=True))
+    assert "autre(s)" not in capsys.readouterr().out
+
+
+def test_une_base_entierement_pourvue_le_dit(base, capsys):
+    _offre(base.conn, "cle-a", texte="Un texte bien réel.")
+    assert cv_cli.cmd_sans_texte(_args_sans_texte(base)) == 0
+    assert "Rien à signaler" in capsys.readouterr().out

@@ -5,6 +5,7 @@ qu'une seule ligne de Flask soit impliquée. L'UI du CP4 empruntera
 exactement le même chemin de code.
 
     python cv_cli.py etat                       # file + couverture en texte
+    python cv_cli.py sans-texte                 # ce qui bloque, et ce qui est récupérable
     python cv_cli.py enfiler <cle|préfixe>      # demande un CV
     python cv_cli.py batch --limite 12          # les 12 meilleures, puis consomme
     python cv_cli.py travailler --une-passe     # vide la file puis rend la main
@@ -74,6 +75,77 @@ def cmd_etat(args) -> int:
                    f"  {job['pdf_path'] or ''}")
         print(f"  #{job['id']:<4} {job['status']:<8} {job['offer_id'][:12]}…{suffixe}")
     conn.close()
+    return 0
+
+
+def cmd_sans_texte(args) -> int:
+    """Inventaire des offres dépourvues de texte, par date de dernier run.
+
+    ## Pourquoi la DATE est la seule colonne qui décide
+
+    Le texte d'une offre ne se récupère qu'en la revoyant en ligne : rien
+    ne le reconstruit hors ligne, ni le cache de classement, ni la base.
+    Une offre revue au dernier run sera donc pourvue au prochain scrape ;
+    une offre disparue des sources depuis trois semaines ne le sera
+    jamais, et restera `TEXT_MISSING` en occupant la liste.
+
+    La commande n'efface RIEN et n'en propose pas l'option. Quelles
+    offres périmées supprimer est un arbitrage — une annonce peut être
+    republiée à l'identique et se rattacher toute seule à sa ligne, la
+    clé étant dérivée du contenu. Ce n'est pas une décision à automatiser
+    derrière un drapeau.
+    """
+    conn = storage.ouvrir(args.db)
+    jobs.ensure_schema(conn)
+
+    total, = conn.execute("SELECT COUNT(*) FROM offres").fetchone()
+    lignes = conn.execute(
+        """SELECT o.cle, o.title, o.company, o.source, o.derniere_vue,
+                  o.dernier_score, o.nb_vues
+           FROM offres o LEFT JOIN offres_texte t ON t.cle = o.cle
+           WHERE t.cle IS NULL
+           ORDER BY o.derniere_vue DESC, o.dernier_score DESC, o.cle"""
+    ).fetchall()
+    # Le dernier run VU DANS LA BASE, et non la date du jour : la
+    # fraîcheur d'une offre se juge par rapport au dernier scrape, pas par
+    # rapport à aujourd'hui. Sans scrape depuis une semaine, tout serait
+    # déclaré périmé alors que rien n'a été retenté.
+    dernier_run, = conn.execute("SELECT MAX(derniere_vue) FROM offres").fetchone()
+    conn.close()
+
+    print(f"Offres sans texte : {len(lignes)} sur {total}")
+    if not lignes:
+        print("  Rien à signaler : chaque offre a son texte.")
+        return 0
+    print(f"Dernier run       : {dernier_run}")
+    print()
+
+    par_date: dict[str, int] = {}
+    for l in lignes:
+        par_date[l["derniere_vue"] or "?"] = par_date.get(l["derniere_vue"] or "?", 0) + 1
+    print("Par date de dernier run :")
+    for jour, n in sorted(par_date.items(), reverse=True):
+        marque = "  <- revues au dernier run : pourvues au prochain scrape" \
+            if jour == dernier_run else ""
+        print(f"  {jour}   {n:>4}{marque}")
+
+    recuperables = par_date.get(dernier_run, 0)
+    print()
+    print(f"  récupérables  : {recuperables}   (revues au dernier run)")
+    print(f"  perdues       : {len(lignes) - recuperables}   (plus revues depuis : "
+          f"leur texte n'existe plus nulle part)")
+
+    a_montrer = lignes if args.tout else lignes[: args.limite]
+    print()
+    print(f"{'clé':<18} {'vu le':<12} {'score':>6}  {'source':<18} titre")
+    for l in a_montrer:
+        score = f"{l['dernier_score']:.3f}" if l["dernier_score"] is not None else "  —  "
+        print(f"{l['cle'][:16]:<16}… {l['derniere_vue'] or '?':<12} {score:>6}  "
+              f"{(l['source'] or '')[:18]:<18} {(l['title'] or '')[:52]}")
+    if len(a_montrer) < len(lignes):
+        print(f"\n… et {len(lignes) - len(a_montrer)} autre(s). "
+              f"--tout pour la liste complète.")
+    print("\nAucune suppression : cette commande ne fait que lire.")
     return 0
 
 
@@ -307,6 +379,13 @@ def main(argv: list[str] | None = None) -> int:
 
     sous.add_parser("etat", help="File et couverture en texte")
 
+    p_sat = sous.add_parser(
+        "sans-texte", help="Offres dépourvues de texte, par date de dernier run")
+    p_sat.add_argument("--limite", type=int, default=25,
+                       help="Nombre d'offres détaillées (défaut : 25)")
+    p_sat.add_argument("--tout", action="store_true",
+                       help="Détaille toutes les offres, sans limite")
+
     p_enf = sous.add_parser("enfiler", help="Demande un CV pour une offre")
     p_enf.add_argument("cle", help="Clé de l'offre, ou un préfixe non ambigu")
 
@@ -332,8 +411,9 @@ def main(argv: list[str] | None = None) -> int:
                             "de l'app web, ou à un « travailler » ultérieur")
 
     args = parser.parse_args(argv)
-    return {"etat": cmd_etat, "enfiler": cmd_enfiler, "orphelins": cmd_orphelins,
-            "travailler": cmd_travailler, "batch": cmd_batch}[args.commande](args)
+    return {"etat": cmd_etat, "sans-texte": cmd_sans_texte, "enfiler": cmd_enfiler,
+            "orphelins": cmd_orphelins, "travailler": cmd_travailler,
+            "batch": cmd_batch}[args.commande](args)
 
 
 if __name__ == "__main__":
