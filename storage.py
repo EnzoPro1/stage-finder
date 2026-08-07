@@ -25,6 +25,7 @@ import sqlite3
 from datetime import date, datetime
 
 import config
+import jobs
 from dedup import _cle as cle_identite
 from normalize import Offre
 
@@ -114,20 +115,55 @@ def cles_connues(conn: sqlite3.Connection) -> set[str]:
 def enregistrer_run(
     conn: sqlite3.Connection, classees: list[tuple[Offre, float]]
 ) -> set[str]:
-    """Enregistre un run : upsert des offres, trace dans `runs`.
+    """Enregistre un run : upsert des offres, texte brut, trace dans `runs`.
 
     Retourne l'ensemble des clés NOUVELLES (jamais vues avant ce run), pour
     permettre à l'appelant de mettre en avant / filtrer les nouveautés.
+
+    ## Pourquoi le TEXTE est écrit ICI
+
+    `offres` ne porte pas de colonne `description` — délibérément : elle est
+    lue en entier à chaque run, et y coller des kilo-octets alourdirait tous
+    les parcours. Le texte va donc dans la table latérale `offres_texte`.
+
+    Mais il doit y aller AU MOMENT DU RUN, et depuis cette fonction. C'est le
+    seul endroit que traversent les deux chemins de scrape (`main.executer` en
+    CLI, `app._collecte` côté web) : l'écrire ailleurs voudrait dire l'écrire
+    deux fois, et l'un des deux finirait par l'oublier. C'est exactement ce
+    qui s'était produit — le texte n'était persisté par AUCUN des deux, et
+    seul un backfill ponctuel depuis `.rank_cache.json` avait pourvu 74 offres
+    sur 294. Les 220 autres affichaient un bouton « Générer CV » inutilisable.
     """
+    # Le texte vit dans `offres_texte`, dont le schéma appartient à `jobs`.
+    # Idempotente et sans coût mesurable une fois par run : la garantie que
+    # la table existe ne peut pas dépendre du fait que chaque appelant y ait
+    # pensé (`main.executer` n'y pensait pas).
+    jobs.ensure_schema(conn)
+
     connues_avant = cles_connues(conn)
     aujourd_hui = date.today().isoformat()
     nouvelles: set[str] = set()
+    # Les textes sont accumulés puis écrits APRÈS le commit des offres.
+    # `jobs.enregistrer_texte` ouvre sa propre transaction (`with conn:`) qui
+    # valide en sortie : l'appeler dans la boucle validerait un upsert
+    # d'offres à moitié fait à chaque tour, là où la fonction ne validait
+    # jusqu'ici qu'une fois, tout ou rien.
+    a_ecrire: list[tuple[str, str]] = []
 
     for offre, score in classees:
         cle = cle_identite(offre)
         est_nouvelle = cle not in connues_avant
         if est_nouvelle:
             nouvelles.add(cle)
+
+        # Un texte VIDE n'écrase rien. Une source qui cesse de livrer la
+        # description (ou une offre reconstruite sans elle, comme le fait
+        # `backfill_textes._offre_depuis_row`) ne doit pas faire disparaître
+        # un texte déjà en base : la génération de CV s'arrêterait net sur
+        # des offres qui marchaient la veille.
+        texte = (offre.description or "").strip()
+        if texte:
+            a_ecrire.append((cle, texte))
 
         if est_nouvelle:
             conn.execute(
@@ -166,9 +202,16 @@ def enregistrer_run(
         (datetime.now().isoformat(timespec="seconds"), len(classees), len(nouvelles)),
     )
     conn.commit()
+
+    # Après le commit, donc : une interruption ici laisse des offres sans
+    # texte, ce que le run suivant répare tout seul. L'ordre inverse
+    # laisserait des textes rattachés à des offres inexistantes.
+    for cle, texte in a_ecrire:
+        jobs.enregistrer_texte(conn, cle, texte)
+
     logger.info(
-        "SQLite : run enregistré (%d offre(s), %d nouveauté(s)) dans %s.",
-        len(classees), len(nouvelles), config.CHEMIN_BASE,
+        "SQLite : run enregistré (%d offre(s), %d nouveauté(s), %d texte(s)) dans %s.",
+        len(classees), len(nouvelles), len(a_ecrire), config.CHEMIN_BASE,
     )
     return nouvelles
 

@@ -172,6 +172,39 @@ def _row(offre: Offre, cos_score: float, cos_rang: int, inclure_desc: bool = Fal
 # ---------------------------------------------------------------------------
 # Tâches de fond : collecte (ranking cosinus) et vérification IA
 # ---------------------------------------------------------------------------
+def _persister(classees: list[tuple[Offre, float]]) -> None:
+    """Enregistre le run collecté depuis le web dans SQLite (offres + textes).
+
+    Ce geste MANQUAIT. La collecte web n'écrivait que ``.rank_cache.json`` :
+    les offres découvertes depuis la page n'entraient jamais dans ``offres``,
+    et leur texte nulle part. Conséquences visibles :
+
+    - le bouton « Générer CV » renvoyait `OFFER_NOT_FOUND` (404) sur toute
+      offre découverte depuis la page, puisque ``/api/offers/<id>/cv`` exige
+      une ligne dans ``offres`` ;
+    - `/api/cv/states` ne pouvait même pas les marquer `text_missing` : il
+      itère sur ``offres``, où elles n'étaient pas. Le front les voyait donc
+      `idle`, bouton actif, échec au clic.
+
+    Une base indisponible ne doit pas perdre la collecte pour autant : le
+    classement en mémoire et le cache disque restent servis.
+    """
+    conn = None
+    try:
+        # L'OUVERTURE fait partie de ce qui peut échouer (chemin invalide,
+        # disque plein) : la laisser hors du `try` referait tomber le thread
+        # de collecte, ce que ce garde-fou existe précisément pour éviter.
+        conn = storage.ouvrir(config.CHEMIN_BASE)
+        nouvelles = storage.enregistrer_run(conn, classees)
+        for offre, _score in classees:
+            offre.nouvelle = cle_identite(offre) in nouvelles
+    except Exception as err:  # noqa: BLE001 - dégradation, pas d'écroulement
+        logger.warning("Run non persisté en base (%s).", err)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _collecte(utiliser_jobspy: bool) -> int:
     """Collecte + ranking cosinus, remplace l'état. Retourne le nb d'offres.
 
@@ -184,6 +217,8 @@ def _collecte(utiliser_jobspy: bool) -> int:
     except Exception as err:  # noqa: BLE001 - une collecte ratée ne doit pas tuer le serveur
         logger.warning("Collecte en échec : %s", err)
         classees = []
+    if classees:
+        _persister(classees)
     with VERROU:
         if classees:
             ETAT["classees"] = classees

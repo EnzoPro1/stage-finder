@@ -11,6 +11,10 @@ from __future__ import annotations
 import pytest
 
 import app as webapp
+import jobs
+import storage
+from dedup import _cle as cle_identite
+from normalize import Offre
 
 
 @pytest.fixture
@@ -107,3 +111,78 @@ def test_etat_expose_la_progression_auto_et_les_sources(client):
     etat = client.get("/api/etat").get_json()
     assert "auto" in etat and etat["auto"] == {"en_cours": False, "etape": 0}
     assert etat["sources"]  # la page affiche les sources réellement interrogées
+
+
+# ---------------------------------------------------------------------------
+# Persistance de la collecte WEB
+#
+# La collecte lancée depuis la page n'écrivait QUE `.rank_cache.json`. Les
+# offres découvertes depuis l'interface n'entraient jamais dans `offres` :
+# `/api/offers/<id>/cv` répondait 404 dessus, et `/api/cv/states` — qui itère
+# sur `offres` — ne pouvait même pas les signaler `text_missing`.
+# ---------------------------------------------------------------------------
+def _offre(titre, texte):
+    return Offre(titre, "ACME", "Paris", texte, f"http://{titre}", "test", "", "")
+
+
+def test_la_collecte_web_persiste_offres_et_textes(tmp_path, monkeypatch):
+    base = tmp_path / "t.db"
+    monkeypatch.setattr(webapp.config, "CHEMIN_BASE", str(base))
+    monkeypatch.setattr(webapp, "_sauver_cache", lambda: None)
+
+    collectees = [(_offre("Stage IA", "Le texte de l'annonce IA."), 0.9),
+                  (_offre("Stage Cyber", "Le texte de l'annonce cyber."), 0.7)]
+    monkeypatch.setattr(webapp.main, "collecter_et_classer",
+                        lambda utiliser_jobspy: collectees)
+
+    assert webapp._collecte(utiliser_jobspy=False) == 2
+
+    conn = storage.ouvrir(str(base))
+    try:
+        cles = {l["cle"] for l in conn.execute("SELECT cle FROM offres")}
+        assert len(cles) == 2
+        for cle in cles:
+            assert jobs.lire_texte(conn, cle)
+        # Formulation UI : plus aucune offre en `text_missing`.
+        assert conn.execute(
+            "SELECT COUNT(*) FROM offres o LEFT JOIN offres_texte t "
+            "ON t.cle = o.cle WHERE t.cle IS NULL").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_le_bouton_generer_cv_marche_sur_une_offre_tout_juste_collectee(
+        tmp_path, monkeypatch, client):
+    """Le bout en bout du défaut : collecter puis cliquer.
+
+    Avant correction, ce POST renvoyait 404 OFFER_NOT_FOUND — l'offre venait
+    d'apparaître à l'écran mais n'existait dans aucune table.
+    """
+    base = tmp_path / "t.db"
+    master = tmp_path / "master.yaml"
+    master.write_text("nom: Test\n", encoding="utf-8")
+    monkeypatch.setattr(webapp.config, "CHEMIN_BASE", str(base))
+    monkeypatch.setattr(webapp.config, "CV_MASTER_PATH", str(master))
+    monkeypatch.setattr(webapp, "_sauver_cache", lambda: None)
+
+    offre = _offre("Stage IA", "Missions : entraîner des modèles pendant 6 mois.")
+    monkeypatch.setattr(webapp.main, "collecter_et_classer",
+                        lambda utiliser_jobspy: [(offre, 0.9)])
+    webapp._collecte(utiliser_jobspy=False)
+
+    cle = cle_identite(offre)
+    reponse = client.post(f"/api/offers/{cle}/cv")
+    assert reponse.status_code == 202, reponse.get_json()
+    assert reponse.get_json()["status"] == "pending"
+
+
+def test_une_base_indisponible_ne_perd_pas_la_collecte(tmp_path, monkeypatch):
+    """Dégradation : la page continue de servir le classement en mémoire."""
+    monkeypatch.setattr(webapp.config, "CHEMIN_BASE",
+                        str(tmp_path / "introuvable" / "t.db"))
+    monkeypatch.setattr(webapp, "_sauver_cache", lambda: None)
+    monkeypatch.setattr(webapp.main, "collecter_et_classer",
+                        lambda utiliser_jobspy: [(_offre("Stage IA", "texte"), 0.9)])
+
+    assert webapp._collecte(utiliser_jobspy=False) == 1
+    assert len(webapp.ETAT["classees"]) == 1

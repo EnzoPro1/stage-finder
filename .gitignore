@@ -18,6 +18,12 @@ stages.html
 # clone. Ces motifs vivaient dans `.git/info/exclude`, qui n'est NI versionné
 # NI cloné — il ne protégeait donc que cette copie de travail.
 stages.db
+# Journal WAL et mémoire partagée : `storage.ouvrir` pose `journal_mode=WAL`,
+# qui fait apparaître ces deux fichiers À CÔTÉ de la base. Ils contiennent des
+# pages de `stages.db` — donc des offres scrapées — et `stages.db` seul ne les
+# couvre pas.
+stages.db-wal
+stages.db-shm
 # `avant-*` et non `avant-recalc-*` : le motif étroit ne couvrait que les
 # sauvegardes de la migration des clés. La première sauvegarde nommée
 # autrement (`stages.avant-replis-*.db`) est passée à travers et se serait
