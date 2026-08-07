@@ -430,3 +430,129 @@ def test_le_worker_reprend_les_orphelins_au_demarrage(base):
         time.sleep(0.02)
     w.arreter()
     assert jobs.lire(base.conn, job["id"])["status"] == "done"
+
+
+# =====================================================================
+# Verrou inter-processus : un seul worker par base
+#
+# Le troisième niveau d'unicité, et le seul qui tienne face à deux
+# INTERPRÉTEURS — `python app.py` d'un côté, `python cv_cli.py batch` de
+# l'autre. Ni le verrou de thread ni le drapeau d'instance ne traversent
+# un processus, et le claim atomique de `jobs.reclamer` empêche bien deux
+# workers de prendre le même job, mais pas de se disputer Ollama.
+# =====================================================================
+def test_le_verrou_est_exclusif(tmp_path):
+    chemin = str(tmp_path / "v.lock")
+    premier = worker_module.VerrouWorker(chemin)
+    second = worker_module.VerrouWorker(chemin)
+    assert premier.acquerir() is True
+    assert second.acquerir() is False
+    assert second.detenu is False
+
+
+def test_le_verrou_relache_se_reprend(tmp_path):
+    chemin = str(tmp_path / "v.lock")
+    premier = worker_module.VerrouWorker(chemin)
+    premier.acquerir()
+    premier.relacher()
+    assert worker_module.VerrouWorker(chemin).acquerir() is True
+
+
+def test_relacher_est_idempotente_et_ne_leve_pas(tmp_path):
+    verrou = worker_module.VerrouWorker(str(tmp_path / "v.lock"))
+    verrou.acquerir()
+    verrou.relacher()
+    verrou.relacher()                               # ne doit pas lever
+    assert verrou.detenu is False
+
+
+def test_une_base_en_memoire_n_a_pas_de_verrou():
+    """Rien à partager entre processus : inventer un fichier commun ferait
+    s'exclure mutuellement des tests sans rapport."""
+    assert worker_module.chemin_verrou(":memory:") is None
+    assert worker_module.VerrouWorker(None).acquerir() is True
+
+
+def test_le_verrou_vit_a_cote_de_la_base(tmp_path):
+    chemin = str(tmp_path / "stages.db")
+    assert worker_module.chemin_verrou(chemin) == chemin + ".worker-lock"
+
+
+def test_un_second_worker_sur_la_meme_base_ne_traite_rien(base):
+    """La panne qu'on empêche : deux générations Ollama en parallèle."""
+    _offre(base.conn, "cle-a")
+    job, _ = jobs.enfiler(base.conn, "cle-a", "h")
+
+    tenu = worker_module.VerrouWorker(worker_module.chemin_verrou(base.chemin))
+    assert tenu.acquerir() is True
+    try:
+        second = _worker(base)
+        assert second.vider() is None
+        assert second.refuse_faute_de_verrou is True
+        # Le job n'a pas bougé : ni traité, ni réclamé, ni échoué.
+        assert jobs.lire(base.conn, job["id"])["status"] == "pending"
+        assert jobs.lire(base.conn, job["id"])["attempts"] == 0
+    finally:
+        tenu.relacher()
+
+
+def test_un_second_worker_ne_reprend_pas_les_orphelins_de_l_autre(base):
+    """Le pire cas : `reprendre_orphelins` repasserait `pending` le job que
+    l'autre processus est EN TRAIN de traiter, et le ferait produire deux
+    fois. C'est pour ça que le verrou est pris AVANT la reprise."""
+    _offre(base.conn, "cle-a")
+    job, _ = jobs.enfiler(base.conn, "cle-a", "h")
+    jobs.reclamer(base.conn)                        # l'autre worker le traite
+
+    tenu = worker_module.VerrouWorker(worker_module.chemin_verrou(base.chemin))
+    tenu.acquerir()
+    try:
+        intrus = _worker(base)
+        intrus.demarrer()
+        time.sleep(0.15)
+        intrus.arreter()
+        assert intrus.refuse_faute_de_verrou is True
+        assert jobs.lire(base.conn, job["id"])["status"] == "running"
+    finally:
+        tenu.relacher()
+
+
+def test_le_verrou_est_rendu_a_la_fin_de_la_boucle(base):
+    w = _worker(base)
+    w.demarrer()
+    time.sleep(0.05)
+    w.arreter()
+    # Un autre worker doit pouvoir prendre la relève immédiatement.
+    suivant = worker_module.VerrouWorker(worker_module.chemin_verrou(base.chemin))
+    assert suivant.acquerir() is True
+    suivant.relacher()
+
+
+def test_vider_consomme_toute_la_file_puis_rend_la_main(base):
+    for i in range(3):
+        _offre(base.conn, f"cle-{i}")
+        jobs.enfiler(base.conn, f"cle-{i}", f"h{i}")
+
+    w = _worker(base)
+    assert w.vider() == 3
+    restants, = base.conn.execute(
+        "SELECT COUNT(*) FROM generation_jobs WHERE status != 'done'").fetchone()
+    assert restants == 0
+
+
+def test_vider_decharge_le_modele_une_seule_fois(base):
+    """Même politique que la boucle continue : le modèle reste chaud entre
+    deux jobs, et n'est déchargé qu'à la vidange."""
+    for i in range(3):
+        _offre(base.conn, f"cle-{i}")
+        jobs.enfiler(base.conn, f"cle-{i}", f"h{i}")
+
+    w = _worker(base)
+    w.vider()
+    assert w.decharges == 1
+
+
+def test_vider_sur_une_file_vide_ne_decharge_rien(base):
+    w = _worker(base)
+    assert w.vider() == 0
+    assert w.decharges == 0

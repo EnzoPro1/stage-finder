@@ -510,3 +510,67 @@ def test_reenregistrer_remplace_sans_dupliquer(conn):
     jobs.enregistrer_texte(conn, "cle-a", "v2")
     assert jobs.lire_texte(conn, "cle-a") == "v2"
     assert conn.execute("SELECT COUNT(*) FROM offres_texte").fetchone()[0] == 1
+
+
+# =====================================================================
+# `jobs.demander` — le point d'entrée unique de la demande
+#
+# Le bouton de l'UI, `cv_cli enfiler` et `cv_cli batch` écrivaient chacun
+# les mêmes quatre vérifications, dans le même ordre. Ces tests portent
+# sur la version partagée : si elle régresse, les trois régressent
+# ensemble, ce qui est précisément le but.
+# =====================================================================
+def test_demander_enfile_et_rend_le_job(conn, master):
+    _offre(conn)
+    job, reutilise = jobs.demander(conn, "cle-a", master_path=master,
+                                   config=FauxConfig())
+    assert reutilise is False
+    assert job["status"] == "pending"
+    assert job["offer_id"] == "cle-a"
+
+
+def test_demander_est_idempotente(conn, master):
+    """Deux demandes identiques = un seul job. C'est ce dont le batch hérite."""
+    _offre(conn)
+    premier, _ = jobs.demander(conn, "cle-a", master_path=master, config=FauxConfig())
+    second, reutilise = jobs.demander(conn, "cle-a", master_path=master,
+                                      config=FauxConfig())
+    assert reutilise is True
+    assert second["id"] == premier["id"]
+    assert conn.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0] == 1
+
+
+def test_demander_refuse_une_offre_inconnue(conn, master):
+    with pytest.raises(jobs.DemandeRefusee) as capture:
+        jobs.demander(conn, "jamais-vue", master_path=master, config=FauxConfig())
+    assert capture.value.code == "OFFER_NOT_FOUND"
+    assert conn.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0] == 0
+
+
+def test_demander_refuse_une_offre_sans_texte(conn, master):
+    _offre(conn, texte=None)
+    with pytest.raises(jobs.DemandeRefusee) as capture:
+        jobs.demander(conn, "cle-a", master_path=master, config=FauxConfig())
+    assert capture.value.code == "TEXT_MISSING"
+    assert conn.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0] == 0
+
+
+def test_demander_refuse_un_master_introuvable(conn, tmp_path):
+    _offre(conn)
+    with pytest.raises(jobs.DemandeRefusee) as capture:
+        jobs.demander(conn, "cle-a", master_path=tmp_path / "nulle-part.yaml",
+                      config=FauxConfig())
+    assert capture.value.code == "MASTER_INVALID"
+    assert conn.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0] == 0
+
+
+def test_un_refus_ne_se_confond_pas_avec_un_succes(conn, master):
+    """`DemandeRefusee` LÈVE au lieu de rendre un `None` à tester.
+
+    Un appelant qui oublierait le test enfilerait un job sur une offre
+    inexistante — et le worker le découvrirait huit cents secondes plus
+    tard.
+    """
+    _offre(conn, texte=None)
+    with pytest.raises(RuntimeError):
+        jobs.demander(conn, "cle-a", master_path=master, config=FauxConfig())

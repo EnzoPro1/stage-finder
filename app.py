@@ -473,6 +473,22 @@ CODES_STAGE_FINDER = frozenset({"TEXT_MISSING", "JOB_NOT_FOUND", "PDF_UNAVAILABL
 
 CATALOGUE_ERREURS = CODES_CV_FORGE | CODES_STAGE_FINDER
 
+# Statut HTTP d'un refus de `jobs.demander`. La correspondance vit ICI et
+# non dans `jobs` : la file n'a pas à connaître HTTP, et la CLI comme le
+# batch se servent des mêmes refus sans jamais parler de 404.
+#
+#   404 l'offre n'existe pas — la clé désigne du vide ;
+#   422 l'offre existe mais n'est pas traitable en l'état (rien à envoyer
+#       au modèle). Ni une faute du client, ni une panne du serveur ;
+#   503 le SERVEUR n'est pas configuré : `CV_MASTER_PATH` ne désigne
+#       aucun fichier. Le client n'y peut rien, réessayer plus tard
+#       éventuellement — c'est exactement 503.
+_HTTP_PAR_REFUS = {
+    "OFFER_NOT_FOUND": 404,
+    "TEXT_MISSING": 422,
+    "MASTER_INVALID": 503,
+}
+
 
 def _erreur(code: str, message: str, http: int):
     """Réponse d'erreur JSON. **Toujours** porteuse d'un code du catalogue.
@@ -598,44 +614,22 @@ def api_cv_demander(offer_id: str):
     l'historique. `TEXT_MISSING` est donc refusé ICI, alors que le worker
     sait aussi le produire — pour l'offre dont le texte disparaît entre
     l'enfilement et le traitement.
+
+    Les vérifications elles-mêmes vivent dans ``jobs.demander``, que la
+    CLI et le batch partagent. Ne reste ici que ce qui est du ressort du
+    HTTP : la traduction d'un code de refus en statut.
     """
     conn = _conn()
-    offre = conn.execute(
-        "SELECT cle, title FROM offres WHERE cle = ?", (offer_id,)
-    ).fetchone()
-    if offre is None:
-        # Même code que celui du worker quand l'offre disparaît en cours de
-        # route : un seul vocabulaire pour une seule situation, vue de deux
-        # endroits. Cf. `worker._traiter_un`.
-        return _erreur("OFFER_NOT_FOUND",
-                       f"aucune offre ne porte la clé « {offer_id} ».", 404)
-
-    texte = jobs.lire_texte(conn, offer_id)
-    if not texte:
-        return _erreur(
-            "TEXT_MISSING",
-            f"le texte de l'offre « {offre['title']} » n'est pas en base : il "
-            f"n'y a rien à envoyer au modèle. Récupérez-le d'abord "
-            f"(python backfill_textes.py --apply).",
-            422,
-        )
-
-    master = Path(config.CV_MASTER_PATH)
-    if not master.is_file():
-        # `MASTER_INVALID` et non `INTERNAL_ERROR`, contrairement à ce que
-        # fait cv_forge pour un master illisible. Le cas n'est pas le même :
-        # ici on n'a rien tenté, on CONSTATE que `config.CV_MASTER_PATH` ne
-        # désigne aucun fichier. C'est un défaut de configuration, dont
-        # l'utilisateur peut faire quelque chose. « Erreur interne »
-        # l'enverrait lire une pile pour une ligne de `config.py`.
-        return _erreur("MASTER_INVALID",
-                       f"master introuvable : {master}. Vérifiez "
-                       f"`CV_MASTER_PATH` dans config.py.", 503)
 
     from cv_forge import ForgeConfig
 
-    empreinte = jobs.calculer_hash(texte, master_path=master, config=ForgeConfig())
-    job, reutilise = jobs.enfiler(conn, offer_id, empreinte)
+    try:
+        job, reutilise = jobs.demander(
+            conn, offer_id,
+            master_path=Path(config.CV_MASTER_PATH), config=ForgeConfig(),
+        )
+    except jobs.DemandeRefusee as refus:
+        return _erreur(refus.code, refus.message, _HTTP_PAR_REFUS[refus.code])
     return jsonify({**_vue_job(conn, job), "reutilise": reutilise}), 202
 
 

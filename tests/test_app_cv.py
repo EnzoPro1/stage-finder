@@ -183,7 +183,11 @@ def test_une_offre_sans_texte_est_refusee_sans_creer_de_job(client, base):
 
     assert reponse.status_code == 422
     assert reponse.get_json()["error_code"] == "TEXT_MISSING"
-    assert "backfill_textes" in reponse.get_json()["error_message"]
+    # Le message ne renvoie plus vers `backfill_textes.py` : ce script est
+    # un one-shot qui lit `.rank_cache.json`, et il ne peut rien pour une
+    # offre absente de ce cache. Depuis que le scrape persiste le texte, le
+    # vrai remède est le prochain run — c'est ce qu'il faut dire.
+    assert "prochain scrape" in reponse.get_json()["error_message"]
     assert _nb_jobs(base.conn) == 0
 
 

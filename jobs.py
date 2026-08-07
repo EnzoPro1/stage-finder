@@ -90,6 +90,20 @@ class TransitionInvalide(RuntimeError):
     """Transition d'état refusée. Signale un bug d'appelant, pas un aléa."""
 
 
+class DemandeRefusee(RuntimeError):
+    """L'offre n'est pas générable : aucun job n'a été créé.
+
+    Porte le MÊME vocabulaire d'erreurs que ``cv_forge.ErrorCode`` et que
+    le worker. Un job qu'on sait d'avance voué à échouer n'occupe pas la
+    file et ne bruite pas l'historique — il est refusé à l'entrée.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 # =====================================================================
 # Pourquoi `offer_id` n'est PAS une clé étrangère vers `offres.cle`
 #
@@ -185,6 +199,62 @@ def enfiler(conn: sqlite3.Connection, offer_id: str, offer_hash: str) -> tuple[d
             (offer_id, offer_hash, _maintenant()),
         )
     return lire(conn, curseur.lastrowid), False
+
+
+def demander(
+    conn: sqlite3.Connection, offer_id: str, *, master_path: Path, config
+) -> tuple[dict, bool]:
+    """« Génère un CV pour cette offre. » Rend ``(job, reutilise)``.
+
+    **Le point d'entrée unique de la demande.** Trois appelants la
+    partagent — le bouton de l'UI (``POST /api/offers/<id>/cv``), la CLI
+    (``cv_cli enfiler``) et le batch (``cv_cli batch``) — et chacun
+    l'écrivait auparavant pour son compte : mêmes quatre vérifications,
+    dans le même ordre, avec le même vocabulaire, recopiées. La troisième
+    copie aurait été celle de trop : c'est ici que se décide ce qui entre
+    dans la file, donc ici que l'idempotence se joue. Trois versions de
+    cette décision, c'est trois idempotences qui finissent par différer.
+
+    Les refus lèvent ``DemandeRefusee`` plutôt que de rendre un couple
+    porteur d'un ``None`` : un appelant qui oublierait de le tester
+    enfilerait un job sur une offre inexistante.
+
+    L'ordre des vérifications n'est pas indifférent : de la moins chère à
+    la plus chère, et le hachage — qui lit tout le master et le texte —
+    ne se fait qu'une fois les trois autres passées.
+    """
+    offre = conn.execute(
+        "SELECT cle, title FROM offres WHERE cle = ?", (offer_id,)
+    ).fetchone()
+    if offre is None:
+        raise DemandeRefusee(
+            "OFFER_NOT_FOUND", f"aucune offre ne porte la clé « {offer_id} »."
+        )
+
+    texte = lire_texte(conn, offer_id)
+    if not texte:
+        raise DemandeRefusee(
+            "TEXT_MISSING",
+            f"le texte de l'offre « {offre['title']} » n'est pas en base : il "
+            f"n'y a rien à envoyer au modèle. Il sera récupéré au prochain "
+            f"scrape si l'annonce est toujours en ligne.",
+        )
+
+    if not Path(master_path).is_file():
+        # `MASTER_INVALID` et non `INTERNAL_ERROR`, contrairement à ce que
+        # fait cv_forge pour un master illisible. Le cas n'est pas le même :
+        # ici on n'a rien tenté, on CONSTATE que le chemin configuré ne
+        # désigne aucun fichier. C'est un défaut de configuration, dont
+        # l'utilisateur peut faire quelque chose. « Erreur interne »
+        # l'enverrait lire une pile pour une ligne de `config.py`.
+        raise DemandeRefusee(
+            "MASTER_INVALID",
+            f"master introuvable : {master_path}. Vérifiez `CV_MASTER_PATH` "
+            f"dans config.py.",
+        )
+
+    return enfiler(conn, offer_id, calculer_hash(texte, master_path=Path(master_path),
+                                                 config=config))
 
 
 def lire(conn: sqlite3.Connection, job_id: int) -> dict | None:

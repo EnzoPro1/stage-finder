@@ -6,6 +6,7 @@ exactement le même chemin de code.
 
     python cv_cli.py etat                       # file + couverture en texte
     python cv_cli.py enfiler <cle|préfixe>      # demande un CV
+    python cv_cli.py batch --limite 12          # les 12 meilleures, puis consomme
     python cv_cli.py travailler --une-passe     # vide la file puis rend la main
     python cv_cli.py travailler                 # worker continu (Ctrl+C)
 """
@@ -21,6 +22,14 @@ import config
 import jobs
 import storage
 import worker as worker_module
+
+# Nombre d'offres qu'un batch considère par défaut. Aligné sur
+# `cv_forge.batch.MAX_FRESH_OFFERS` (12), qui vient d'une mesure : une
+# offre à extraire coûte ~800 s au pire, et 12 × 800 s ≈ 2 h 40, soit une
+# fenêtre nocturne. La valeur est recopiée plutôt qu'importée : le batch
+# de cv_forge travaille sur un dossier de fichiers, celui-ci sur une base
+# — deux plafonds qui se trouvent égaux aujourd'hui, pas un seul.
+LIMITE_BATCH_DEFAUT = 12
 
 
 def _resoudre_offre(conn, fragment: str):
@@ -77,22 +86,17 @@ def cmd_enfiler(args) -> int:
         print(f"Erreur : {erreur}", file=sys.stderr)
         return 1
 
-    texte = jobs.lire_texte(conn, offre["cle"])
-    if not texte:
-        print(f"Erreur : l'offre « {offre['title']} » n'a pas de texte en base "
-              f"(état TEXT_MISSING).\n  Lancez d'abord :  python backfill_textes.py --apply",
-              file=sys.stderr)
-        return 1
-
     from cv_forge import ForgeConfig
 
-    master = Path(config.CV_MASTER_PATH)
-    if not master.is_file():
-        print(f"Erreur : master introuvable : {master}", file=sys.stderr)
+    try:
+        job, reutilise = jobs.demander(
+            conn, offre["cle"],
+            master_path=Path(config.CV_MASTER_PATH), config=ForgeConfig(),
+        )
+    except jobs.DemandeRefusee as refus:
+        print(f"Erreur [{refus.code}] : {refus.message}", file=sys.stderr)
+        conn.close()
         return 1
-
-    empreinte = jobs.calculer_hash(texte, master_path=master, config=ForgeConfig())
-    job, reutilise = jobs.enfiler(conn, offre["cle"], empreinte)
 
     verbe = "déjà en file" if reutilise else "enfilé"
     print(f"Job #{job['id']} {verbe} — {offre['title']} ({offre['company']})")
@@ -140,25 +144,10 @@ def cmd_travailler(args) -> int:
         return 1
 
     w = worker_module.Worker(db_path=args.db, intervalle=args.intervalle)
-    conn = storage.ouvrir(args.db)
-    jobs.ensure_schema(conn)
-    repris, abandonnes = jobs.reprendre_orphelins(conn)
-    if repris or abandonnes:
-        print(f"Reprise : {repris} job(s) remis en file, {abandonnes} abandonné(s).")
 
     if args.une_passe:
-        traites = 0
-        while w._traiter_un(conn):
-            traites += 1
-        w._file_active = traites > 0
-        w._au_repos()
-        print(f"{traites} job(s) traité(s). File vide.")
-        if w.decharges:
-            print("Modèle déchargé (file vidée).")
-        conn.close()
-        return 0
+        return _vider(w)
 
-    conn.close()
     print("Worker démarré. Ctrl+C pour arrêter.")
     w.demarrer()
     try:
@@ -167,6 +156,143 @@ def cmd_travailler(args) -> int:
     except KeyboardInterrupt:
         print("\nArrêt demandé…")
         w.arreter()
+    if w.refuse_faute_de_verrou:
+        print(_AUTRE_WORKER, file=sys.stderr)
+        return 1
+    return 0
+
+
+_AUTRE_WORKER = (
+    "Un autre processus consomme déjà la file de cette base (l'app web, "
+    "sans doute).\n  Rien n'a été traité ici : deux workers se disputeraient "
+    "Ollama."
+)
+
+
+def _vider(w) -> int:
+    """Vide la file dans ce processus. Rend le code de sortie."""
+    traites = w.vider()
+    if traites is None:
+        print(_AUTRE_WORKER, file=sys.stderr)
+        return 1
+    print(f"{traites} job(s) traité(s). File vide.")
+    if w.decharges:
+        print("Modèle déchargé (file vidée).")
+    return 0
+
+
+# =====================================================================
+# Batch : enfiler en masse, puis consommer
+# =====================================================================
+def cmd_batch(args) -> int:
+    """Demande un CV pour les meilleures offres, puis vide la file.
+
+    ## Le batch n'est PAS un second chemin de génération
+
+    Il n'appelle ni ``generate_cv`` ni ``cv_forge`` : il pose des lignes
+    dans ``generation_jobs`` avec ``jobs.demander`` — le même point
+    d'entrée que le bouton de l'UI — puis consomme la file avec le même
+    ``Worker``. Construction de l'``OfferInput``, nettoyage du titre,
+    calcul de l'``offer_hash``, jeton Ollama et déchargement : rien de
+    tout cela n'est réécrit ici, tout est déjà dans ``jobs`` et
+    ``worker``.
+
+    L'idempotence vaut donc pour le batch sans une ligne de plus : une
+    offre déjà générée sous le même ``offer_hash`` retrouve son job
+    ``done`` et n'est pas régénérée.
+
+    ## Le worker unique reste unique
+
+    Deux réponses étaient possibles, et c'est la RÉUNION des deux qui est
+    juste, parce qu'aucune ne couvre les deux situations réelles :
+
+    - « le batch enfile et attend » suppose que quelqu'un consomme. La
+      nuit, Flask ne tourne pas : la file resterait pleine au matin ;
+    - « le batch EST le worker » suppose l'inverse. Lancé pendant que
+      l'app web tourne, il ferait deux workers sur un Ollama qui n'en
+      supporte qu'un.
+
+    Le batch tente donc de PRENDRE le verrou de worker. S'il l'obtient,
+    il consomme lui-même ; sinon, il sait que quelqu'un d'autre consomme,
+    et il se contente d'attendre la file. Le choix se fait à l'exécution,
+    d'après ce qui tourne — et non d'après ce qu'on croyait au moment de
+    lancer la commande.
+    """
+    conn = storage.ouvrir(args.db)
+    jobs.ensure_schema(conn)
+
+    from cv_forge import ForgeConfig
+
+    master = Path(config.CV_MASTER_PATH)
+    forge = ForgeConfig()
+
+    # Les meilleures d'abord : `dernier_score` est le score du dernier run.
+    # NULLS LAST explicite — en SQLite, NULL trie AVANT tout le reste en
+    # DESC, donc les offres jamais classées passeraient devant.
+    candidates = conn.execute(
+        """SELECT o.cle FROM offres o
+           JOIN offres_texte t ON t.cle = o.cle
+           ORDER BY (o.dernier_score IS NULL), o.dernier_score DESC, o.cle
+           LIMIT ?""",
+        (args.limite,),
+    ).fetchall()
+
+    enfiles = reutilises = 0
+    refus: dict[str, int] = {}
+    for ligne in candidates:
+        try:
+            _job, reutilise = jobs.demander(
+                conn, ligne["cle"], master_path=master, config=forge
+            )
+        except jobs.DemandeRefusee as r:
+            refus[r.code] = refus.get(r.code, 0) + 1
+            if r.code == "MASTER_INVALID":
+                # Le même refus pour toutes les offres : inutile d'itérer.
+                print(f"Erreur [{r.code}] : {r.message}", file=sys.stderr)
+                conn.close()
+                return 1
+            continue
+        reutilises += reutilise
+        enfiles += not reutilise
+
+    total, = conn.execute("SELECT COUNT(*) FROM offres").fetchone()
+    # Comptée par la JOINTURE et non par `COUNT(*) FROM offres_texte` : un
+    # texte peut survivre à son offre (fusion de doublons), et le compte
+    # afficherait alors plus d'offres pourvues qu'il n'y a d'offres.
+    sans_texte, = conn.execute(
+        "SELECT COUNT(*) FROM offres o LEFT JOIN offres_texte t ON t.cle = o.cle "
+        "WHERE t.cle IS NULL"
+    ).fetchone()
+    en_attente = jobs.en_attente(conn)
+    conn.close()
+
+    print(f"Offres          : {total}  (avec texte : {total - sans_texte})")
+    # Le chiffre à surveiller : ces offres-là ne sont PAS candidates, et
+    # le resteront tant qu'un scrape ne les aura pas revues en ligne.
+    print(f"  sans texte    : {sans_texte}   [TEXT_MISSING] -> non candidates")
+    print(f"  candidates    : {len(candidates)}   (limite {args.limite})")
+    print(f"  enfilées      : {enfiles}")
+    print(f"  déjà connues  : {reutilises}   (idempotence : même hash -> même job)")
+    for code, n in sorted(refus.items()):
+        print(f"  refusées      : {n}   [{code}]")
+    print(f"File            : {en_attente} job(s) à traiter")
+
+    if args.enfiler_seulement:
+        print("\n--enfiler-seulement : rien n'a été consommé.")
+        return 0
+    if not en_attente:
+        return 0
+
+    w = worker_module.Worker(db_path=args.db)
+    traites = w.vider()
+    if traites is not None:
+        print(f"\n{traites} job(s) traité(s). File vide.")
+        if w.decharges:
+            print("Modèle déchargé (file vidée).")
+        return 0
+
+    print(f"\n{_AUTRE_WORKER}")
+    print("Les jobs sont enfilés : l'autre worker les traitera.")
     return 0
 
 
@@ -196,9 +322,18 @@ def main(argv: list[str] | None = None) -> int:
     p_tra.add_argument("--intervalle", type=float,
                        default=worker_module.INTERVALLE_SONDAGE_S)
 
+    p_bat = sous.add_parser(
+        "batch", help="Demande un CV pour les meilleures offres, puis consomme")
+    p_bat.add_argument("--limite", type=int, default=LIMITE_BATCH_DEFAUT,
+                       help=f"Nombre d'offres considérées, les mieux classées "
+                            f"d'abord (défaut : {LIMITE_BATCH_DEFAUT})")
+    p_bat.add_argument("--enfiler-seulement", action="store_true",
+                       help="Enfile sans consommer : laisse la file au worker "
+                            "de l'app web, ou à un « travailler » ultérieur")
+
     args = parser.parse_args(argv)
     return {"etat": cmd_etat, "enfiler": cmd_enfiler, "orphelins": cmd_orphelins,
-            "travailler": cmd_travailler}[args.commande](args)
+            "travailler": cmd_travailler, "batch": cmd_batch}[args.commande](args)
 
 
 if __name__ == "__main__":

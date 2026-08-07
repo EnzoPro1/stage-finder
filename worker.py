@@ -7,18 +7,25 @@ importé nulle part ailleurs.
 ## Un seul worker
 
 Ollama local ne supporte pas deux générations concurrentes sans
-s'écrouler. L'unicité est garantie à DEUX niveaux, volontairement
+s'écrouler. L'unicité est garantie à TROIS niveaux, volontairement
 distincts du jeton (``ollama_pool.JETON``), qui lui ne sérialise que les
 appels individuels :
 
 1. ``demarrer()`` refuse de lancer un second thread si un est vivant ;
-2. le claim en base est atomique de toute façon (``jobs.reclamer``), donc
-   même deux workers ne traiteraient jamais le même job.
+2. ``VerrouWorker`` — un verrou INTER-PROCESSUS sur un fichier voisin de
+   la base. C'est le seul des trois qui tienne face à deux interpréteurs
+   distincts, et c'est le cas réel : ``python app.py`` d'un côté,
+   ``python cv_cli.py batch`` de l'autre ;
+3. le claim en base est atomique de toute façon (``jobs.reclamer``), donc
+   même deux workers ne traiteraient jamais le même job — mais ils se
+   disputeraient Ollama, ce que le claim ne peut pas empêcher.
 
 Le piège classique est le **reloader de Flask**, qui lance DEUX processus
-et donc deux workers dans deux interpréteurs — que ni le verrou ni le
-thread ne voient. D'où ``worker_autorise()``, à interroger avant de
-démarrer.
+et donc deux workers dans deux interpréteurs — que ni le verrou de thread
+ni le drapeau d'instance ne voient. D'où ``worker_autorise()``, à
+interroger avant de démarrer. Le verrou inter-processus le couvre aussi,
+mais ``worker_autorise()`` évite au superviseur de démarrer un thread
+pour le voir refuser aussitôt.
 
 ## Déchargement
 
@@ -31,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import threading
 import traceback as traceback_module
 from pathlib import Path
@@ -47,6 +55,100 @@ logger = logging.getLogger(__name__)
 # Pause entre deux sondages de la file quand elle est vide. Assez court
 # pour qu'un clic parte vite, assez long pour ne pas marteler SQLite.
 INTERVALLE_SONDAGE_S = 1.0
+
+# Suffixe du fichier de verrou, voisin de la base. Deux processus qui
+# visent la même base visent donc le même verrou, sans rien à configurer.
+SUFFIXE_VERROU = ".worker-lock"
+
+
+def chemin_verrou(db_path: str) -> str | None:
+    """Fichier de verrou associé à une base. ``None`` si la base est en mémoire.
+
+    Une base ``:memory:`` n'est partagée avec personne : il n'y a rien à
+    verrouiller entre processus, et inventer un fichier commun ferait
+    s'exclure mutuellement des tests qui n'ont aucun rapport.
+    """
+    if not db_path or db_path.startswith(":memory:") or db_path.startswith("file::memory:"):
+        return None
+    return db_path + SUFFIXE_VERROU
+
+
+class VerrouWorker:
+    """Verrou inter-processus : un seul worker par base, tous processus confondus.
+
+    ## Pourquoi une transaction SQLite et pas un fichier témoin
+
+    Un fichier créé en ``O_EXCL`` et supprimé à la sortie serait plus
+    court à écrire, et FAUX : un worker tué (Ctrl+C brutal, plantage,
+    arrêt de la machine) laisserait le témoin derrière lui, et plus aucun
+    worker ne redémarrerait jamais sans intervention manuelle. Un bail à
+    heartbeat corrigerait ça, mais il faudrait le rafraîchir PENDANT un
+    job — et un job dure des minutes, pendant lesquelles la boucle ne
+    revient pas. Un bail non rafraîchi expire, et un second worker
+    démarre en plein milieu du premier : exactement ce qu'on empêche.
+
+    Une transaction ``BEGIN EXCLUSIVE`` tenue ouverte sur un petit fichier
+    dédié n'a aucun de ces défauts. Le verrou est détenu par l'OS pour le
+    compte du descripteur de fichier : il est relâché quand le processus
+    meurt, quelle qu'en soit la manière, sans rien à nettoyer ni à
+    rafraîchir. Vérifié sur ce poste, y compris sur un processus tué.
+
+    Le fichier est DÉDIÉ, jamais ``stages.db`` : une transaction exclusive
+    sur la base bloquerait Flask, le scrape et toute lecture pendant tout
+    le run.
+    """
+
+    def __init__(self, chemin: str | None) -> None:
+        self.chemin = chemin
+        self._conn: sqlite3.Connection | None = None
+
+    @property
+    def detenu(self) -> bool:
+        return self._conn is not None
+
+    def acquerir(self) -> bool:
+        """Prend le verrou. Rend False si un autre processus le détient.
+
+        Ne bloque pas : ``busy_timeout=0``. Un batch qui découvre que
+        Flask porte déjà le worker n'a pas à attendre pour l'apprendre —
+        il a autre chose à faire (attendre la file, pas le verrou).
+        """
+        if self.chemin is None or self._conn is not None:
+            return True
+        conn = sqlite3.connect(self.chemin, isolation_level=None, timeout=0)
+        conn.execute("PRAGMA busy_timeout=0")
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
+        except sqlite3.OperationalError as err:
+            conn.close()
+            logger.info("Worker déjà en place ailleurs (%s) : %s", self.chemin, err)
+            return False
+        self._conn = conn
+        return True
+
+    def relacher(self) -> None:
+        """Rend le verrou. Idempotente, et ne lève jamais.
+
+        Appelée dans un ``finally`` : une base déjà fermée ou un disque
+        parti ne doit pas masquer l'erreur qui a mené jusque-là.
+        """
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+    def __enter__(self) -> bool:
+        return self.acquerir()
+
+    def __exit__(self, *_exc) -> None:
+        self.relacher()
 
 
 def worker_autorise(*, reloader_actif: bool = False, env: dict | None = None) -> bool:
@@ -110,6 +212,10 @@ class Worker:
         # sans lui, chaque tour à vide re-déchargerait un modèle déjà parti.
         self._file_active = False
         self.decharges = 0            # compteur, lu par les tests
+        # Vrai si la boucle s'est arrêtée faute de verrou inter-processus.
+        # `demarrer()` rend True dans ce cas — le thread A démarré — et
+        # seul ce drapeau distingue « rien à faire » de « pas ma place ».
+        self.refuse_faute_de_verrou = False
 
     # -- configuration paresseuse -------------------------------------
     def config_forge(self):
@@ -188,6 +294,19 @@ class Worker:
 
     # -- boucle ---------------------------------------------------------
     def _boucle(self) -> None:
+        verrou = VerrouWorker(chemin_verrou(self.db_path))
+        if not verrou.acquerir():
+            # Un autre PROCESSUS porte déjà le worker de cette base. On ne
+            # touche à rien — surtout pas à `reprendre_orphelins`, qui
+            # repasserait `pending` le job que l'autre est en train de
+            # traiter, et le ferait produire deux fois.
+            logger.warning(
+                "Worker non démarré : un autre processus consomme déjà la "
+                "file de %s.", self.db_path,
+            )
+            self.refuse_faute_de_verrou = True
+            return
+
         conn = storage.ouvrir(self.db_path)
         jobs.ensure_schema(conn)
         repris, abandonnes = jobs.reprendre_orphelins(conn)
@@ -201,6 +320,37 @@ class Worker:
                     self._arret.wait(self.intervalle)
         finally:
             conn.close()
+            verrou.relacher()
+
+    def vider(self) -> int | None:
+        """Consomme la file jusqu'au bout, DANS CE FIL, puis rend la main.
+
+        Rend le nombre de jobs traités, ou ``None`` si un autre processus
+        porte déjà le worker — auquel cas on n'a RIEN fait, et l'appelant
+        doit attendre plutôt que de consommer en parallèle.
+
+        C'est le mode du batch et de ``cv_cli travailler --une-passe`` :
+        même verrou, même reprise des orphelins, même déchargement en fin
+        de file que la boucle continue. Deux façons d'écrire ça, c'était
+        deux façons de rater le verrou — et ``--une-passe`` le ratait.
+        """
+        verrou = VerrouWorker(chemin_verrou(self.db_path))
+        if not verrou.acquerir():
+            self.refuse_faute_de_verrou = True
+            return None
+
+        conn = storage.ouvrir(self.db_path)
+        try:
+            jobs.ensure_schema(conn)
+            jobs.reprendre_orphelins(conn)
+            traites = 0
+            while not self._arret.is_set() and self._traiter_un(conn):
+                traites += 1
+            self._au_repos()
+            return traites
+        finally:
+            conn.close()
+            verrou.relacher()
 
     def _au_repos(self) -> None:
         """File vide. Décharge le modèle SI on vient de finir de travailler.
