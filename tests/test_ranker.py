@@ -79,3 +79,61 @@ def test_composer_multiplicatif(monkeypatch):
     # 0.5*(1+0.2)=0.6 > 0.5*(1+0)=0.5
     assert classees[0][1] > classees[1][1]
     assert abs(classees[0][1] - 0.6) < 1e-9
+
+
+# =====================================================================
+# Hors ligne : le classement ne doit RIEN demander à Hugging Face
+#
+# Le projet revendique « 100 % local ». Le worker de génération posait
+# déjà `HF_HUB_OFFLINE` (`embeddings_env.preparer`), mais le CLASSEMENT —
+# le chemin de loin le plus emprunté — ne passait par aucun des deux :
+# chaque chargement allait demander à HF si le modèle avait changé, d'où
+# le message réclamant un `HF_TOKEN`. Sur une machine sans réseau, le
+# chargement ÉCHOUAIT alors que le modèle était en cache.
+# =====================================================================
+def test_le_chargement_prepare_l_environnement_avant_d_importer(monkeypatch):
+    """L'ORDRE est tout : `preparer` après l'import ne servirait à rien.
+
+    `huggingface_hub` recopie `HF_HUB_OFFLINE` dans une constante à son
+    import et ne la relit jamais.
+    """
+    import embeddings_env
+
+    ordre = []
+    monkeypatch.setattr(ranker, "_modele", None)
+    monkeypatch.setattr(
+        embeddings_env, "preparer",
+        lambda nom=None: ordre.append(("preparer", nom)) or {"hors_ligne": True},
+    )
+
+    class FauxST:
+        max_seq_length = 128
+
+        def __init__(self, nom):
+            ordre.append(("SentenceTransformer", nom))
+
+    import sys
+    from types import ModuleType
+
+    faux = ModuleType("sentence_transformers")
+    faux.SentenceTransformer = FauxST
+    monkeypatch.setitem(sys.modules, "sentence_transformers", faux)
+
+    ranker._charger_modele()
+    monkeypatch.setattr(ranker, "_modele", None)
+
+    assert [nom for nom, _ in ordre] == ["preparer", "SentenceTransformer"]
+    # Et sur LE modèle du projet, pas sur le défaut de cv_forge : les deux
+    # se trouvent identiques aujourd'hui, ce n'est pas une garantie.
+    assert ordre[0][1] == config.MODELE_EMBEDDING
+
+
+def test_le_module_active_truststore_a_l_import():
+    """Le bloc `try: import truststore` recopié a été remplacé par l'appel
+    partagé : il doit rester ÉQUIVALENT, pas disparaître."""
+    import ssl
+
+    import embeddings_env
+
+    assert embeddings_env.activer_truststore() is True
+    assert ssl.SSLContext is not None      # l'injection n'a rien cassé

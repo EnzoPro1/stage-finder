@@ -24,6 +24,11 @@ stages.db
 # couvre pas.
 stages.db-wal
 stages.db-shm
+# Verrou inter-processus du worker (`worker.VerrouWorker`) : une base
+# SQLite vide, dont seul le VERROU compte, plus son journal. Créés à côté
+# de la base au premier démarrage du worker.
+stages.db.worker-lock
+stages.db.worker-lock-journal
 # `avant-*` et non `avant-recalc-*` : le motif étroit ne couvrait que les
 # sauvegardes de la migration des clés. La première sauvegarde nommée
 # autrement (`stages.avant-replis-*.db`) est passée à travers et se serait

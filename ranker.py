@@ -25,17 +25,17 @@ import re
 import numpy as np
 
 import config
+import embeddings_env
 import extract
 from normalize import Offre
 
-# Active le magasin de certificats de l'OS pour le téléchargement du modèle
-# (même problématique TLS que les sources : proxy/antivirus qui intercepte).
-try:
-    import truststore
-
-    truststore.inject_into_ssl()
-except Exception:  # noqa: BLE001
-    pass
+# Le magasin de certificats de l'OS, pour le cas où le modèle doit encore
+# être téléchargé (même problématique TLS que les sources : proxy ou
+# antivirus qui intercepte). `embeddings_env.activer_truststore` fait
+# exactement cela ; on l'appelle ici plutôt que de recopier le bloc, et à
+# l'import plutôt qu'au chargement, pour que l'effet précède tout usage
+# du réseau par ce module.
+embeddings_env.activer_truststore()
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +44,38 @@ _modele = None
 
 
 def _charger_modele():
-    """Charge (une fois) le modèle sentence-transformers et borne la troncature."""
+    """Charge (une fois) le modèle sentence-transformers et borne la troncature.
+
+    ## Hors ligne : ici, et pas au démarrage de chaque exécutable
+
+    `HF_HUB_OFFLINE` doit être posé AVANT que `huggingface_hub` ne soit
+    importé — la lib recopie la variable dans une constante de module à
+    l'import et ne la relit jamais. Le poser dans `main.py` et dans
+    `app.py` marcherait, et laisserait le trou ouvert pour la troisième
+    porte d'entrée qu'on oubliera : `evaluation.py`, `benchmark.py`, ou
+    un script à venir.
+
+    Ce point-ci est le VRAI goulot : c'est la seule ligne du projet qui
+    importe `sentence_transformers` pour le classement, et elle est
+    exécutée avant lui. Toute porte d'entrée passe par elle, y compris
+    celles qui n'existent pas encore.
+
+    Le projet revendique « 100 % local » ; sans ce réglage, chaque
+    chargement va demander à Hugging Face si le modèle a changé — d'où le
+    message réclamant un `HF_TOKEN`. Sur une machine sans réseau, le
+    chargement ÉCHOUE alors que le modèle est en cache (constaté).
+    """
     global _modele
     if _modele is None:
+        # AVANT l'import : `preparer` ne peut plus rien pour une lib déjà
+        # chargée (elle corrige la constante quand elle peut, mais mieux
+        # vaut ne pas en dépendre).
+        etat = embeddings_env.preparer(config.MODELE_EMBEDDING)
+        if not etat["hors_ligne"]:
+            logger.info(
+                "Modèle absent du cache Hugging Face : téléchargement autorisé "
+                "pour cette fois (une seule).")
+
         # Import tardif : évite de payer le coût de torch tant qu'on ne classe pas.
         from sentence_transformers import SentenceTransformer
 
