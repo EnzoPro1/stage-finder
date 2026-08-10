@@ -35,6 +35,13 @@ stages.db.worker-lock-journal
 # retrouvée dans un commit. Toute sauvegarde de la base est ignorée, quel
 # que soit le motif qui l'a produite.
 stages.avant-*.db
+# Instantanés de référence (`reference.py --geler`) : ce sont des copies
+# complètes de `stages.db`, donc des offres scrapées. Seul le MANIFESTE
+# (`reference.json` — un chemin, une empreinte, des compteurs) est versionné,
+# c'est lui qui permet de dire depuis un clone si un rapport a été calculé
+# sur la bonne base.
+stages.reference-*.db
+.reference.json.tmp
 .rank_cache.json
 .rome_cache.json
 # Temporaire de l'écriture atomique de `etiqueter.exporter_json`. Le fichier

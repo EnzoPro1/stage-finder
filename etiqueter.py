@@ -55,7 +55,7 @@ import sqlite3
 import statistics
 from datetime import datetime
 
-import config
+import reference
 import storage
 import verifier
 
@@ -175,21 +175,13 @@ def _serialiser(etiquettes: dict[str, dict]) -> str:
 def exporter_json(etiquettes: dict[str, dict], chemin: str = CHEMIN_JSON) -> int:
     """Écrit le corpus dans ``chemin`` de façon ATOMIQUE. Rend le nombre d'étiquettes.
 
-    Temporaire dans le MÊME dossier que la cible, puis ``os.replace`` : le
-    renommage est atomique côté système de fichiers, donc le fichier lu par un
-    autre processus est toujours soit l'ancien complet, soit le nouveau
-    complet. Écrire en place (`open(chemin, "w")`) tronque AVANT d'écrire :
-    une interruption à cet instant détruirait le corpus, c'est-à-dire la seule
-    donnée non régénérable du projet.
+    Écrire en place (`open(chemin, "w")`) tronque AVANT d'écrire : une
+    interruption à cet instant détruirait le corpus, c'est-à-dire la seule
+    donnée non régénérable du projet. Le mécanisme lui-même vit dans
+    ``reference.ecrire_atomique`` — il sert aussi au manifeste de référence, et
+    deux implémentations d'une garantie finissent par diverger.
     """
-    contenu = _serialiser(etiquettes)
-    dossier = os.path.dirname(os.path.abspath(chemin))
-    temporaire = os.path.join(dossier, f".{os.path.basename(chemin)}.tmp")
-    with open(temporaire, "w", encoding="utf-8", newline="\n") as f:
-        f.write(contenu)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temporaire, chemin)
+    reference.ecrire_atomique(chemin, _serialiser(etiquettes))
     return len(etiquettes)
 
 
@@ -378,12 +370,24 @@ def ventilation(offres: list[dict], etiquettes: dict[str, dict] | None = None) -
 _AIDE = ("  [o] m'intéresse    [n] ne m'intéresse pas    [?] passer\n"
          "  [t] texte intégral  [q] quitter (sauvegarde)")
 
+_LIBELLE = {1: "m'intéresse", 0: "ne m'intéresse pas"}
 
-def _afficher(offre: dict, position: int, total: int, compte: dict, integral: bool) -> None:
-    """Affiche UNE offre à l'aveugle : ni source, ni score, ni rang, ni longueur."""
+
+def _afficher(offre: dict, position: int, total: int, compte: dict, integral: bool,
+              precedente: dict | None = None) -> None:
+    """Affiche UNE offre à l'aveugle : ni source, ni score, ni rang, ni longueur.
+
+    ``precedente`` — l'étiquette déjà posée sur cette offre, s'il y en a une.
+    Elle EST montrée, contrairement au reste : c'est un jugement qu'on a soi-même
+    porté, pas une information du système, et l'ignorer ferait écraser un avis
+    sans le savoir.
+    """
     print("\n" + "─" * 78)
     print(f"Offre {position}/{total}   —   étiquetées : "
           f"{compte['oui']} oui / {compte['non']} non / {compte['passees']} passées")
+    if precedente is not None:
+        print(f"⚠ DÉJÀ ÉTIQUETÉE le {precedente['etiquete_le'][:10]} : "
+              f"« {_LIBELLE[precedente['pertinent']]} »")
     print("─" * 78)
     print(f"\n  {offre['title']}")
     print(f"  {offre['company'] or '—'}   |   {offre['location'] or '—'}\n")
@@ -413,27 +417,40 @@ def ordre_presentation(offres: list[dict]) -> list[dict]:
 
 
 def session(
-    conn: sqlite3.Connection, chemin_json: str = CHEMIN_JSON, *, lire=input
+    conn: sqlite3.Connection, chemin_json: str = CHEMIN_JSON, *,
+    lire=input, revoir: bool = False,
 ) -> dict:
     """Déroule une session d'étiquetage. Rend un petit bilan.
+
+    Deux garde-fous, tous deux sur le chemin d'ÉCRITURE et non sur la
+    présentation, pour qu'ils tiennent quelle que soit la façon dont une offre
+    déjà jugée se retrouve à l'écran (``revoir``, réimport, clé recalculée) :
+
+    - **rien n'est écrasé en silence.** Un jugement différent du précédent
+      demande confirmation ; un jugement identique passe sans rien demander,
+      puisqu'il n'écrase rien ;
+    - **rien n'est jamais supprimé.** ``?`` laisse l'étiquette existante en
+      place — c'est « je ne sais pas », pas « efface ce que je pensais ».
 
     ``lire`` est injecté pour que les tests exercent la boucle sans clavier.
     """
     candidates = vivier(conn)
     deja = lire_etiquettes(conn)
-    a_faire = ordre_presentation([o for o in candidates if o["cle"] not in deja])
+    a_voir = candidates if revoir else [o for o in candidates if o["cle"] not in deja]
+    a_faire = ordre_presentation(a_voir)
 
     print(f"\nVivier : {len(candidates)} offre(s) — {len(deja)} déjà étiquetée(s), "
-          f"{len(a_faire)} à voir.")
+          f"{len(a_faire)} à voir{' (revue comprise)' if revoir else ''}.")
     print(f"Ordre mélangé, graine {GRAINE_MELANGE} (fixe : la reprise suit le même ordre).")
 
-    compte = {"oui": 0, "non": 0, "passees": 0}
+    compte = {"oui": 0, "non": 0, "passees": 0, "conservees": 0}
     integral = False
     i = 0
     try:
         while i < len(a_faire):
             offre = a_faire[i]
-            _afficher(offre, i + 1, len(a_faire), compte, integral)
+            precedente = deja.get(offre["cle"])
+            _afficher(offre, i + 1, len(a_faire), compte, integral, precedente)
             touche = (lire("> ") or "").strip().lower()
 
             if touche == "t":
@@ -443,9 +460,23 @@ def session(
             if touche == "q":
                 break
             if touche == "?":
+                # Ne touche à RIEN : une étiquette existante survit à un
+                # « je ne sais pas ».
                 compte["passees"] += 1
             elif touche in ("o", "n"):
-                enregistrer_etiquette(conn, offre, 1 if touche == "o" else 0)
+                valeur = 1 if touche == "o" else 0
+                if precedente is not None and precedente["pertinent"] != valeur:
+                    print(f"  ↳ écraser « {_LIBELLE[precedente['pertinent']]} » "
+                          f"par « {_LIBELLE[valeur]} » ? [o/N]")
+                    if (lire("  > ") or "").strip().lower() != "o":
+                        print("  ↳ conservé.")
+                        compte["conservees"] += 1
+                        i += 1
+                        continue
+                enregistrer_etiquette(conn, offre, valeur)
+                deja[offre["cle"]] = {**(precedente or {}), "pertinent": valeur,
+                                      "etiquete_le": datetime.now().isoformat(
+                                          timespec="seconds")}
                 compte["oui" if touche == "o" else "non"] += 1
             else:
                 print("  ↳ touche inconnue.")
@@ -516,19 +547,27 @@ def main() -> None:
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     p = argparse.ArgumentParser(description="Étiquetage du corpus de référence.")
-    p.add_argument("--db", default=config.CHEMIN_BASE, help="Base SQLite.")
+    p.add_argument("--db", default=None,
+                   help="Base SQLite (défaut : l'instantané de référence s'il existe).")
     p.add_argument("--json", default=CHEMIN_JSON, dest="chemin_json",
                    help="Fichier d'étiquettes (source de vérité).")
     p.add_argument("--etat", action="store_true", help="Ventilation, sans rien changer.")
+    p.add_argument("--revoir", action="store_true",
+                   help="Re-présente aussi les offres déjà étiquetées (confirmation exigée).")
     p.add_argument("--export", action="store_true", help="Table -> JSON.")
     p.add_argument("--import", action="store_true", dest="importer",
                    help="JSON -> table (simulation sans --apply).")
     p.add_argument("--apply", action="store_true", help="Autorise l'écriture de --import.")
     args = p.parse_args()
 
-    conn = storage.ouvrir(args.db)
+    chemin_db = args.db or reference.base_par_defaut()
+    conn = storage.ouvrir(chemin_db)
     ensure_schema(conn)
     try:
+        # L'en-tête d'abord, toujours : étiqueter sur la base vive alors qu'une
+        # référence est figée produirait un corpus qui ne correspond à aucune
+        # mesure. Autant que ce soit visible avant la première annonce.
+        reference.afficher_entete(reference.controler(conn, chemin_db), chemin_db)
         if args.etat:
             afficher_etat(conn)
         elif args.export:
@@ -540,7 +579,7 @@ def main() -> None:
                 args.chemin_json,
             )
         else:
-            session(conn, args.chemin_json)
+            session(conn, args.chemin_json, revoir=args.revoir)
     finally:
         conn.close()
 

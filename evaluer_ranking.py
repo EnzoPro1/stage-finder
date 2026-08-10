@@ -48,6 +48,7 @@ import sys
 
 import config
 import etiqueter
+import reference
 import storage
 from dedup import _cle as cle_identite
 from normalize import Offre
@@ -198,7 +199,8 @@ def _ventilation_corpus(corpus: dict) -> dict:
     return etiqueter.ventilation(offres, etiquettes)
 
 
-def construire_rapport(conn, chemin_json: str, k: int, motif_annexe: str) -> dict:
+def construire_rapport(conn, chemin_json: str, k: int, motif_annexe: str,
+                       chemin_db: str = "") -> dict:
     corpus = charger_corpus(conn, chemin_json)
     mesures = evaluer_corpus(corpus, k)
     reel = rangs_run_reel(conn, motif_annexe)
@@ -213,7 +215,10 @@ def construire_rapport(conn, chemin_json: str, k: int, motif_annexe: str) -> dic
         and min(mesures.get("n_positives", 0), mesures.get("n_negatives", 0))
         >= MIN_CLASSE_MINORITAIRE
     )
+    controle = reference.controler(conn, chemin_db) if chemin_db else None
     return {
+        "reference": controle,
+        "chemin_db": chemin_db,
         "config": {
             "modele": config.MODELE_EMBEDDING,
             "max_seq_length": config.MAX_SEQ_LENGTH,
@@ -247,6 +252,10 @@ def afficher_rapport(r: dict, k: int) -> None:
     print("=" * 78)
     print("ÉVALUATION DU RANKING — corpus étiqueté seul, cosinus seul (sans LLM)")
     print("=" * 78)
+    if r.get("reference") is not None:
+        reference.afficher_entete(r["reference"], r["chemin_db"])
+        print()
+    print("--- Réglages mesurés ---")
     print(f"  modèle           : {c['modele']}")
     print(f"  max_seq_length   : {c['max_seq_length']}")
     print(f"  composition      : {c['mode_composition']} / {c['normalisation']}"
@@ -333,7 +342,8 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s",
                         stream=sys.stderr)
     p = argparse.ArgumentParser(description="Évaluation du ranking sur le corpus étiqueté.")
-    p.add_argument("--db", default=config.CHEMIN_BASE, help="Base SQLite (lecture seule).")
+    p.add_argument("--db", default=None,
+                   help="Base SQLite (défaut : l'instantané de référence s'il existe).")
     p.add_argument("--etiquettes", default=etiqueter.CHEMIN_JSON,
                    help="Corpus étiqueté (source de vérité).")
     p.add_argument("--k", type=int, default=10, help="Rang de coupure des métriques.")
@@ -343,9 +353,10 @@ def main() -> None:
                    help="Écrit aussi le rapport complet en JSON.")
     args = p.parse_args()
 
-    conn = storage.ouvrir(args.db)
+    chemin_db = args.db or reference.base_par_defaut()
+    conn = storage.ouvrir(chemin_db)
     try:
-        rapport = construire_rapport(conn, args.etiquettes, args.k, args.annexe)
+        rapport = construire_rapport(conn, args.etiquettes, args.k, args.annexe, chemin_db)
     finally:
         conn.close()
 
@@ -355,6 +366,10 @@ def main() -> None:
             json.dump(rapport, f, ensure_ascii=False, indent=2, sort_keys=True)
             f.write("\n")
         print(f"\nRapport JSON : {args.sortie_json}")
+
+    # Une comparaison invalide doit ÉCHOUER, pas rendre un chiffre plausible.
+    if rapport.get("reference", {}) and rapport["reference"]["conforme"] is False:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

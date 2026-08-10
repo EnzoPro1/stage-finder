@@ -159,6 +159,105 @@ def test_session_enregistre_o_et_n_et_saute_sur_interrogation(base_peuplee, tmp_
     assert len(json.loads(open(chemin, encoding="utf-8").read())) == 2
 
 
+def test_offre_deja_etiquetee_n_est_pas_re_presentee_par_defaut(base_peuplee, tmp_path):
+    etiqueter.enregistrer_etiquette(
+        base_peuplee, {"cle": "aaa", "title": "T", "company": "C", "url": "U"}, 1)
+    reponses = iter(["q"])
+    etiqueter.session(base_peuplee, str(tmp_path / "e.json"), lire=lambda _: next(reponses))
+    # Rien à assurer de plus que l'absence d'exception : la seule offre
+    # étiquetée ne revient pas, donc la file est plus courte d'une unité.
+    restantes = [o for o in etiqueter.vivier(base_peuplee) if o["cle"] != "aaa"]
+    assert len(restantes) == len(etiqueter.vivier(base_peuplee)) - 1
+
+
+def _repondeur(principale: str, confirmation: str = ""):
+    """Faux clavier qui distingue la question principale de la confirmation.
+
+    L'ordre de présentation étant mélangé, une liste de réponses positionnelle
+    se désynchroniserait dès qu'une offre demande une question de plus. On
+    répond donc à l'INVITE, pas au rang.
+    """
+    journal = []
+
+    # L'invite vaut « > » pour la question principale et «   > » pour la
+    # confirmation : on discrimine sur l'indentation.
+    def lire(invite):
+        journal.append(invite)
+        return confirmation if invite.startswith("  ") else principale
+
+    lire.journal = journal
+    return lire
+
+
+def test_revoir_signale_l_etiquette_precedente(base_peuplee, tmp_path, capsys):
+    etiqueter.enregistrer_etiquette(
+        base_peuplee, {"cle": "aaa", "title": "T", "company": "C", "url": "U"}, 1)
+    etiqueter.session(base_peuplee, str(tmp_path / "e.json"),
+                      lire=_repondeur("?"), revoir=True)
+    sortie = capsys.readouterr().out
+    assert "DÉJÀ ÉTIQUETÉE" in sortie and "m'intéresse" in sortie
+
+
+def test_ecraser_un_jugement_exige_une_confirmation(base_peuplee, tmp_path):
+    """Refuser la confirmation laisse l'étiquette précédente en place."""
+    etiqueter.enregistrer_etiquette(
+        base_peuplee, {"cle": "aaa", "title": "T", "company": "C", "url": "U"}, 1)
+    avant = etiqueter.lire_etiquettes(base_peuplee)["aaa"]
+
+    lire = _repondeur("n", confirmation="")  # « n » partout, confirmation refusée
+    etiqueter.session(base_peuplee, str(tmp_path / "e.json"), lire=lire, revoir=True)
+
+    assert any(i.startswith("  ") for i in lire.journal), "aucune confirmation demandée"
+    assert etiqueter.lire_etiquettes(base_peuplee)["aaa"] == avant, (
+        "un refus de confirmation ne doit rien écraser"
+    )
+
+
+def test_confirmer_ecrase_bien(base_peuplee, tmp_path):
+    etiqueter.enregistrer_etiquette(
+        base_peuplee, {"cle": "aaa", "title": "T", "company": "C", "url": "U"}, 1)
+    etiqueter.session(base_peuplee, str(tmp_path / "e.json"),
+                      lire=_repondeur("n", confirmation="o"), revoir=True)
+    assert etiqueter.lire_etiquettes(base_peuplee)["aaa"]["pertinent"] == 0
+
+
+def test_reposer_le_meme_jugement_ne_demande_pas_confirmation(base_peuplee, tmp_path):
+    """Rien n'est écrasé : la confirmation serait du bruit."""
+    etiqueter.enregistrer_etiquette(
+        base_peuplee, {"cle": "aaa", "title": "T", "company": "C", "url": "U"}, 1)
+    lire = _repondeur("o", confirmation="o")
+    etiqueter.session(base_peuplee, str(tmp_path / "e.json"), lire=lire, revoir=True)
+
+    assert not any(i.startswith("  ") for i in lire.journal), (
+        f"confirmation demandée sans écrasement : {lire.journal}"
+    )
+    assert etiqueter.lire_etiquettes(base_peuplee)["aaa"]["pertinent"] == 1
+
+
+def test_passer_ne_supprime_jamais_une_etiquette(base_peuplee, tmp_path):
+    for cle in ("aaa", "bbb"):
+        etiqueter.enregistrer_etiquette(
+            base_peuplee, {"cle": cle, "title": "T", "company": "C", "url": "U"}, 1)
+    avant = etiqueter.lire_etiquettes(base_peuplee)
+
+    etiqueter.session(base_peuplee, str(tmp_path / "e.json"),
+                      lire=_repondeur("?"), revoir=True)
+
+    assert etiqueter.lire_etiquettes(base_peuplee) == avant, (
+        "« je ne sais pas » n'est pas « efface ce que je pensais »"
+    )
+
+
+def test_une_session_ne_reduit_jamais_le_corpus(base_peuplee, tmp_path):
+    for cle in ("aaa", "bbb", "ccc"):
+        etiqueter.enregistrer_etiquette(
+            base_peuplee, {"cle": cle, "title": "T", "company": "C", "url": "U"}, 1)
+    avant = len(etiqueter.lire_etiquettes(base_peuplee))
+    etiqueter.session(base_peuplee, str(tmp_path / "e.json"),
+                      lire=_repondeur("n", confirmation=""), revoir=True)
+    assert len(etiqueter.lire_etiquettes(base_peuplee)) >= avant
+
+
 def test_session_exporte_meme_apres_interruption(base_peuplee, tmp_path):
     chemin = str(tmp_path / "etiquettes.json")
 

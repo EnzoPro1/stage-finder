@@ -31,6 +31,7 @@ import time
 import config
 import etiqueter
 import evaluer_ranking
+import reference
 import storage
 
 logger = logging.getLogger(__name__)
@@ -78,13 +79,14 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description="Benchmark de modèles d'embedding.")
-    parser.add_argument("--db", default=config.CHEMIN_BASE)
+    parser.add_argument("--db", default=None)
     parser.add_argument("--etiquettes", default=etiqueter.CHEMIN_JSON)
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--modeles", nargs="+", default=MODELES_DEFAUT)
     args = parser.parse_args()
 
-    conn = storage.ouvrir(args.db)
+    chemin_db = args.db or reference.base_par_defaut()
+    conn = storage.ouvrir(chemin_db)
     try:
         corpus = evaluer_ranking.charger_corpus(conn, args.etiquettes)
     finally:
