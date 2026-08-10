@@ -88,7 +88,9 @@ fichier — que de la configuration.
 | `ranker.py` | Cœur du projet : encodage + classement sémantique. |
 | `storage.py` | Persistance SQLite et détection des nouveautés. |
 | `report.py` | Exports CSV et HTML. |
-| `evaluation.py` | Évaluation de la qualité du ranking (labels de référence). |
+| `evaluation.py` | Métriques pures : precision@k, nDCG@k, rang médian des positives. |
+| `etiqueter.py` | Corpus étiqueté de référence (CLI à l'aveugle, `etiquettes.json`). |
+| `evaluer_ranking.py` | Mesure le ranking sur le corpus étiqueté (baseline reproductible). |
 | `benchmark.py` | Mesure de performance du pipeline. |
 | `console.py` | Force l'UTF-8 sur la console Windows (badges, emoji). |
 | `tests/` | Suite `pytest` (filtres, normalisation, dédup, ranker, storage, secrets…). |

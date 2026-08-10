@@ -1,35 +1,32 @@
 """
-evaluation.py — Harnais d'évaluation du ranking (precision@k / nDCG).
+evaluation.py — Métriques PURES de qualité d'un classement.
 
-Aujourd'hui les poids (BOOST_IA, BOOST_CYBER…) et le mode de composition du
-score sont réglés à la main, à l'aveugle. Ce module transforme ce réglage en
-**optimisation mesurée** :
+Ce module ne connaît ni les offres, ni le modèle, ni la base : il ne manipule
+que des listes de pertinences **dans l'ordre du classement produit**. C'est ce
+qui le rend testable sans rien charger, et réutilisable par n'importe quel
+harnais.
 
-  1. On labellise un petit jeu d'offres (pertinent = 1 / non pertinent = 0) dans
-     un fichier JSON (voir labels.example.json).
-  2. On fait classer ces offres par le ranking réel.
-  3. On mesure la qualité du classement avec deux métriques standard de
-     l'information retrieval :
-        - precision@k : proportion d'offres pertinentes dans le top-k.
-        - nDCG@k      : gain cumulé actualisé normalisé (récompense les
-                        pertinents placés HAUT dans la liste).
+Le harnais lui-même — charger le corpus étiqueté, classer, mesurer — vit dans
+``evaluer_ranking.py``. Il vivait ici, sur un jeu de dix offres INVENTÉES
+(`labels.example.json`) alignées sur l'URL ; ni l'un ni l'autre ne tenait :
+des offres fictives ne mesurent pas un ranking, et les URLs de Careerjet sont
+des redirections opaques qui ne survivent pas à un re-scrape.
 
-On peut alors comparer objectivement deux réglages (modèle, poids, mode de
-composition) au lieu de juger « à l'œil ».
+Quatre métriques, qui disent quatre choses différentes :
+  - precision@k        : proportion de pertinents dans le top-k.
+  - nDCG@k             : récompense les pertinents placés HAUT.
+  - rang médian des positives : parle du symptôme « ma bonne offre est 37e ».
+  - négatives dans le top-k   : le critère d'acceptation, directement.
 
 Le module s'appelle `evaluation` (et non `eval`) pour ne pas masquer la builtin
 `eval` de Python.
-
-Utilisation :
-    python evaluation.py labels.example.json --k 10
 """
 
 from __future__ import annotations
 
-import argparse
-import json
 import logging
 import math
+import statistics
 
 logger = logging.getLogger(__name__)
 
@@ -65,76 +62,28 @@ def ndcg_at_k(pertinences: list[float], k: int) -> float:
     return dcg / ideal if ideal > 0 else 0.0
 
 
-# ---------------------------------------------------------------------------
-# Harnais : charge un jeu labellisé, classe, mesure
-# ---------------------------------------------------------------------------
-def _charger_labels(chemin: str) -> list[dict]:
-    """Charge un fichier JSON = liste d'offres avec un champ `pertinent`."""
-    with open(chemin, "r", encoding="utf-8") as f:
-        donnees = json.load(f)
-    if not isinstance(donnees, list):
-        raise ValueError("Le fichier de labels doit être une liste JSON d'offres.")
-    return donnees
+def rang_median_positives(pertinences: list[float]) -> float | None:
+    """Rang médian (1-based) des items pertinents. ``None`` s'il n'y en a aucun.
 
-
-def evaluer(chemin_labels: str, k: int = 10) -> dict:
-    """Classe le jeu labellisé et retourne {precision@k, ndcg@k, n}.
-
-    Import tardif de `ranker`/`normalize`/`extract` : on ne paie le coût du
-    modèle que si on lance vraiment une évaluation.
+    C'est la métrique qui parle du symptôme observé — « l'offre qui m'intéresse
+    est 37e » — là où precision@k et nDCG@k ne regardent que la tête de liste
+    et ne bougeraient pas d'un iota si cette offre passait de la 37e à la 30e
+    place. Sur un nombre pair de positives, la médiane est une demi-position :
+    c'est voulu, on ne l'arrondit pas vers un rang qui n'existe pas.
     """
-    import extract
-    import ranker
-    from normalize import Offre
-
-    brut = _charger_labels(chemin_labels)
-
-    offres, labels = [], {}
-    for item in brut:
-        offre = Offre(
-            title=item.get("title", ""),
-            company=item.get("company", ""),
-            location=item.get("location", ""),
-            description=item.get("description", ""),
-            url=item.get("url", ""),
-            source=item.get("source", "eval"),
-            posted_at=item.get("posted_at", ""),
-            salary=item.get("salary", ""),
-        )
-        offres.append(offre)
-        # Clé d'alignement label ↔ offre = URL (unique dans un jeu propre).
-        labels[offre.url] = float(item.get("pertinent", 0))
-
-    extract.annoter_toutes(offres)
-    classees = ranker.classer(offres)
-
-    pertinences_classees = [labels.get(o.url, 0.0) for (o, _s) in classees]
-    resultat = {
-        "n": len(offres),
-        "k": k,
-        "precision@k": round(precision_at_k(pertinences_classees, k), 4),
-        "ndcg@k": round(ndcg_at_k(pertinences_classees, k), 4),
-    }
-    return resultat
+    rangs = [i for i, rel in enumerate(pertinences, 1) if rel > 0]
+    return statistics.median(rangs) if rangs else None
 
 
-def main() -> None:
-    import console  # noqa: F401 - force UTF-8 sur la console Windows
+def negatives_dans_top_k(pertinences: list[float], k: int) -> int:
+    """Nombre d'items NON pertinents dans les k premiers.
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    parser = argparse.ArgumentParser(description="Évaluation du ranking (precision@k / nDCG).")
-    parser.add_argument("labels", nargs="?", default="labels.example.json",
-                        help="Fichier JSON d'offres labellisées.")
-    parser.add_argument("--k", type=int, default=10, help="Rang de coupure des métriques.")
-    args = parser.parse_args()
-
-    res = evaluer(args.labels, args.k)
-    print("\n=== Évaluation du ranking ===")
-    print(f"  Jeu           : {res['n']} offre(s) labellisée(s)")
-    print(f"  Mode de score : (voir config.MODE_COMPOSITION_SCORE)")
-    print(f"  precision@{res['k']:<3} : {res['precision@k']}")
-    print(f"  nDCG@{res['k']:<7} : {res['ndcg@k']}")
-
-
-if __name__ == "__main__":
-    main()
+    Redondant avec precision@k tant que le corpus n'a que deux classes — et
+    délibérément conservé : c'est la formulation du critère d'acceptation
+    (« aucune offre étiquetée "ne m'intéresse pas" dans le top-10 »), donc un
+    chiffre qui se lit sans conversion mentale. Une liste plus courte que k ne
+    compte pas les places manquantes comme des négatives.
+    """
+    if k <= 0:
+        return 0
+    return sum(1 for rel in pertinences[:k] if rel <= 0)

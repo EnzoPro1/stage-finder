@@ -37,6 +37,11 @@ stages.db.worker-lock-journal
 stages.avant-*.db
 .rank_cache.json
 .rome_cache.json
+# Temporaire de l'écriture atomique de `etiqueter.exporter_json`. Le fichier
+# final (`etiquettes.json`) est LUI versionné : c'est le corpus étiqueté, la
+# seule donnée du projet qui ne se régénère pas. Seul son intermédiaire, qui
+# ne survit à une exécution normale, n'a rien à faire dans un commit.
+.etiquettes.json.tmp
 .pytest_cache/
 
 # Cache modèles HuggingFace (si local au projet)

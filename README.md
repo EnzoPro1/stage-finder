@@ -452,13 +452,23 @@ python -m verifier          # démo du verdict LLM (nécessite Ollama)
 Le réglage des poids/modèle n'est plus « à l'aveugle » : on mesure.
 ```powershell
 python config_schema.py                    # valide config.py (fail-fast)
-python evaluation.py labels.example.json   # precision@k + nDCG sur un jeu labellisé
+python etiqueter.py                        # étiquette des offres réelles de stages.db
+python evaluer_ranking.py                  # precision@10 / nDCG@10 / rang médian
 python benchmark.py                        # compare plusieurs modèles d'embedding
 python -m pytest tests/ -q                 # suite de tests (fixtures figées)
 ```
-Labellise 30–50 offres (`pertinent` : 1/0) dans un fichier au format de
-`labels.example.json`, puis compare deux réglages de `config.py` par leurs
-scores : c'est de l'optimisation mesurée, pas de l'intuition.
+Le jeu de référence est constitué **sur les vraies offres de `stages.db`**, pas
+sur des annonces inventées : `etiqueter.py` les présente à l'aveugle (ni source,
+ni score, ni rang) dans un ordre mélangé à graine fixe, et enregistre un
+jugement binaire. La vérité vit dans `etiquettes.json`, versionné ; la table
+`etiquettes` n'en est qu'un cache, reconstructible par `--import`.
+
+`evaluer_ranking.py` classe **le corpus étiqueté seul** avec le ranking cosinus
+(sans LLM, donc strictement déterministe) et rend quatre chiffres :
+`precision@10`, `nDCG@10`, rang médian des positives, nombre de négatives dans
+le top-10 — plus la ventilation du corpus par source et par longueur de texte,
+sans laquelle les chiffres ne se lisent pas. Deux exécutions consécutives
+produisent une sortie identique octet pour octet.
 
 ---
 
@@ -489,7 +499,10 @@ job-finder/
 ├── ranker.py               # ranking sémantique (multi-profils, composition du score)
 ├── storage.py              # persistance SQLite (cache, nouveautés, historique)
 ├── report.py               # exports CSV + HTML (filtrable)
-├── evaluation.py           # harnais precision@k / nDCG
+├── evaluation.py           # métriques pures : precision@k, nDCG@k, rang médian
+├── etiqueter.py            # corpus étiqueté de référence (CLI à l'aveugle)
+├── evaluer_ranking.py      # mesure le ranking sur le corpus étiqueté
+├── etiquettes.json         # LE corpus — source de vérité, versionnée
 ├── benchmark.py            # comparaison de modèles d'embedding
 ├── verifier.py             # vérification LLM locale (Ollama), verdict explicable
 ├── market.py               # indicateurs « le marché est-il favorable ? »
@@ -501,7 +514,6 @@ job-finder/
 ├── titre_offre.py          # nettoyage du titre pour l'en-tête du CV
 ├── cv_cli.py               # pilotage de la file sans Flask (batch, sans-texte…)
 ├── static/cv_etats.js      # machine à états du bouton « Générer CV »
-├── labels.example.json     # jeu labellisé d'exemple pour l'évaluation
 ├── tests/                  # suite pytest + fixtures JSON par source
 └── README.md
 ```
