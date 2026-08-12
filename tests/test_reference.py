@@ -167,8 +167,11 @@ def test_entete_crie_sur_derive(base, tmp_path, capsys):
     reference.geler(chemin, dossier=str(tmp_path), chemin_manifeste=manifeste)
     reference.afficher_entete(reference.controler(conn, chemin, manifeste), chemin)
     sortie = capsys.readouterr().out
-    assert "DÉRIVE DE LA RÉFÉRENCE" in sortie
+    assert "DÉRIVE DES DONNÉES" in sortie
     assert "n'est PAS comparable" in sortie
+    assert "CONFIGURATION MODIFIÉE" not in sortie, (
+        "la config n'a pas bougé : ne pas la mettre en cause"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +198,142 @@ def test_base_par_defaut_retombe_si_l_instantane_a_ete_efface(base, tmp_path, mo
     os.remove(tmp_path / m["chemin"])
     monkeypatch.chdir(tmp_path)
     assert reference.base_par_defaut(manifeste) == config.CHEMIN_BASE
+
+
+# ---------------------------------------------------------------------------
+# Estampille de configuration
+# ---------------------------------------------------------------------------
+def test_aucune_constante_de_score_n_est_oubliee():
+    """Ajouter un poids dans config.py sans l'estampiller doit CASSER ici.
+
+    Sans ce test, la liste `CONSTANTES_RANKING` se périmerait en silence : on
+    ajouterait `BOOST_TECHNICITE` en Phase 2, il ne serait pas estampillé, et
+    deux rapports incomparables se déclareraient conformes.
+    """
+    import config
+
+    prefixes = ("BOOST_", "BONUS_", "MALUS_", "SEUIL_", "MODE_", "METHODE_",
+                "MODELE_", "PREFIXE_", "PROFILS_", "AGGREGATION_", "DUREE_",
+                "DATE_DEBUT_", "MAX_SEQ", "DEDUP_")
+    # Exclusions justifiées une par une (cf. le commentaire de CONSTANTES_RANKING).
+    hors_score = {"SEUIL_", "MODE_"}  # aucun aujourd'hui, garde-fou de forme
+    del hors_score
+
+    attendues = {c.split(".", 1)[1] for c in reference.CONSTANTES_RANKING
+                 if c.startswith("config.")}
+    trouvees = {nom for nom in dir(config)
+                if nom.isupper() and nom.startswith(prefixes)}
+    oubliees = trouvees - attendues
+    assert not oubliees, (
+        f"constantes de score non estampillées : {sorted(oubliees)} — "
+        f"ajoute-les à reference.CONSTANTES_RANKING"
+    )
+
+
+def test_empreinte_config_est_stable():
+    assert reference.empreinte_config() == reference.empreinte_config()
+
+
+def test_empreinte_config_bouge_avec_une_constante(monkeypatch):
+    import config
+    avant = reference.empreinte_config()
+    monkeypatch.setattr(config, "MAX_SEQ_LENGTH", 512)
+    assert reference.empreinte_config() != avant
+
+
+def test_manifeste_porte_les_valeurs_pas_seulement_l_empreinte(base, tmp_path):
+    chemin, _conn = base
+    m = reference.geler(chemin, dossier=str(tmp_path),
+                        chemin_manifeste=str(tmp_path / "reference.json"))
+    assert m["constantes"]["config.MAX_SEQ_LENGTH"] is not None
+    assert len(m["constantes"]) == len(reference.CONSTANTES_RANKING)
+    assert m["empreinte_config"] == reference.empreinte_config(m["constantes"])
+
+
+def test_config_modifiee_est_un_verdict_distinct_des_donnees(base, tmp_path, monkeypatch):
+    """Données conformes + config modifiée : un seul des deux verdicts tombe."""
+    import config
+    chemin, _conn = base
+    manifeste = str(tmp_path / "reference.json")
+    m = reference.geler(chemin, dossier=str(tmp_path), chemin_manifeste=manifeste)
+    fige_path = str(tmp_path / m["chemin"])
+
+    monkeypatch.setattr(config, "MAX_SEQ_LENGTH", 512)
+    fige = sqlite3.connect(fige_path)
+    try:
+        controle = reference.controler(fige, fige_path, manifeste)
+    finally:
+        fige.close()
+
+    assert controle["donnees"]["conforme"] is True, "les données n'ont pas bougé"
+    assert controle["config"]["conforme"] is False
+    assert controle["conforme"] is False, "l'agrégat doit refuser la comparaison"
+    noms = [c["nom"] for c in controle["config"]["changements"]]
+    assert noms == ["config.MAX_SEQ_LENGTH"]
+    ch = controle["config"]["changements"][0]
+    assert ch["avant"] == "256" and ch["apres"] == "512"
+
+
+def test_donnees_modifiees_sans_toucher_a_la_config(base, tmp_path):
+    """Le symétrique : config conforme, données non."""
+    chemin, conn = base
+    manifeste = str(tmp_path / "reference.json")
+    reference.geler(chemin, dossier=str(tmp_path), chemin_manifeste=manifeste)
+    controle = reference.controler(conn, chemin, manifeste)
+    assert controle["config"]["conforme"] is True
+    assert controle["donnees"]["conforme"] is False
+
+
+def test_bandeau_nomme_la_constante_en_cause(base, tmp_path, monkeypatch, capsys):
+    import config
+    chemin, _conn = base
+    manifeste = str(tmp_path / "reference.json")
+    m = reference.geler(chemin, dossier=str(tmp_path), chemin_manifeste=manifeste)
+    fige_path = str(tmp_path / m["chemin"])
+
+    monkeypatch.setattr(config, "BOOST_IA", 0.42)
+    fige = sqlite3.connect(fige_path)
+    try:
+        reference.afficher_entete(reference.controler(fige, fige_path, manifeste),
+                                  fige_path)
+    finally:
+        fige.close()
+
+    sortie = capsys.readouterr().out
+    assert "CONFIGURATION MODIFIÉE" in sortie
+    assert "config.BOOST_IA : 0.05  →  0.42" in sortie
+    assert "DÉRIVE DES DONNÉES" not in sortie, (
+        "les deux pannes ne doivent jamais se confondre dans un seul message"
+    )
+
+
+def test_entete_imprime_les_valeurs_des_constantes(base, tmp_path, capsys):
+    chemin, conn = base
+    reference.afficher_entete(reference.controler(conn, chemin,
+                                                  str(tmp_path / "absent.json")), chemin)
+    sortie = capsys.readouterr().out
+    assert "config.MAX_SEQ_LENGTH" in sortie and "256" in sortie
+    assert "config.MODE_COMPOSITION_SCORE" in sortie
+    # Les listes sont résumées, pas recopiées : le rapport doit rester lisible.
+    assert "config.MOTS_CLES_IA" in sortie and "élément(s)" in sortie
+
+
+def test_manifeste_sans_estampille_n_est_pas_declare_conforme(base, tmp_path):
+    """Un vieux manifeste ne doit pas passer pour une configuration validée."""
+    chemin, conn = base
+    manifeste = str(tmp_path / "reference.json")
+    m = reference.geler(chemin, dossier=str(tmp_path), chemin_manifeste=manifeste)
+    ancien = {c: v for c, v in m.items() if c not in ("constantes", "empreinte_config")}
+    reference.ecrire_atomique(manifeste, json.dumps(ancien) + "\n")
+
+    fige_path = str(tmp_path / m["chemin"])
+    fige = sqlite3.connect(fige_path)
+    try:
+        controle = reference.controler(fige, fige_path, manifeste)
+    finally:
+        fige.close()
+    assert controle["config"]["conforme"] is None
+    assert controle["conforme"] is not True
 
 
 # ---------------------------------------------------------------------------

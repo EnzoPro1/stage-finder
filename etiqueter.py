@@ -567,7 +567,11 @@ def main() -> None:
         # L'en-tête d'abord, toujours : étiqueter sur la base vive alors qu'une
         # référence est figée produirait un corpus qui ne correspond à aucune
         # mesure. Autant que ce soit visible avant la première annonce.
-        reference.afficher_entete(reference.controler(conn, chemin_db), chemin_db)
+        # Sans la liste des constantes : elles ne changent pas l'annonce qu'on
+        # lit, et trente-deux lignes avant chaque session seraient du bruit.
+        # Les bandeaux de dérive, eux, restent affichés.
+        reference.afficher_entete(reference.controler(conn, chemin_db), chemin_db,
+                                  constantes=False)
         if args.etat:
             afficher_etat(conn)
         elif args.export:
