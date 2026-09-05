@@ -22,6 +22,7 @@ from datetime import date, datetime
 
 from dateutil import parser as dateparser
 
+import communes
 import config
 import observabilite
 from normalize import Offre
@@ -61,16 +62,30 @@ def est_en_idf(offre: Offre) -> bool:
     publient depuis Paris des postes qui sont ailleurs (« Stage Data Scientist -
     IT (H/F) - Canada »). Le champ « lieu » dit alors « Paris » et le seul indice
     fiable est dans l'intitulé.
+
+    ## Le référentiel a remplacé la liste blanche
+
+    Le lieu était comparé à ``config.LIEUX_ACCEPTES``, une vingtaine de
+    sous-chaînes écrites à la main. Toute commune absente était rejetée : sur
+    un lot JobSpy réel, **35 offres sur 93**, dont Neuilly-sur-Seine, Suresnes,
+    Gennevilliers, Puteaux, Thiais et Vélizy-Villacoublay. JobSpy écrit ses
+    lieux « Commune, A8, FR » — ni la commune ni `A8`, le code ISO de la
+    région, ne figuraient dans la liste.
+
+    ``communes.est_idf`` connaît les 1 266 communes de la région et les quatre
+    formats de lieu des sources. ``MARQUEURS_ETRANGERS`` est CONSERVÉ, en
+    barrière secondaire : le référentiel couvre déjà les États américains et
+    les régions françaises, mais une liste de garde qui ne coûte rien se retire
+    quand on a mesuré qu'elle ne sert plus, pas avant.
     """
     if _MOTIF_ETRANGER_TITRE.search(offre.title):
         return False
-    lieu = offre.location.lower()
-    if not lieu:
-        # Localisation vide : permissif, on laisse passer (le ranking jugera).
-        return True
-    if any(marqueur in lieu for marqueur in config.MARQUEURS_ETRANGERS):
+    lieu = offre.location or ""
+    # Barrière secondaire, évaluée avant le référentiel : elle ne peut que
+    # rejeter, jamais accepter, donc elle ne masque aucune reconnaissance.
+    if lieu and any(marqueur in lieu.lower() for marqueur in config.MARQUEURS_ETRANGERS):
         return False
-    return any(zone in lieu for zone in config.LIEUX_ACCEPTES)
+    return communes.est_idf(lieu)
 
 
 def _parse_date(texte: str) -> date | None:
