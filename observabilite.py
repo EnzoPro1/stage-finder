@@ -96,6 +96,7 @@ class LigneSource:
     brut: int = 0
     normalisees: int = 0
     survivantes: int = 0
+    fusions: int = 0
     rejets: dict[str, int] = field(default_factory=dict)
     incidents: list[Incident] = field(default_factory=list)
 
@@ -103,6 +104,17 @@ class LigneSource:
     def perdues_normalisation(self) -> int:
         """Items bruts inexploitables (titre ou URL manquants, item cassé)."""
         return max(0, self.brut - self.normalisees)
+
+    @property
+    def retenues(self) -> int:
+        """Ce qui reste VRAIMENT après déduplication.
+
+        ``survivantes`` est compté par `filters.filtrer`, qui tourne AVANT
+        `dedup` : sans cette soustraction, la colonne annonçait des offres que
+        la déduplication avait déjà supprimées. C'est l'angle mort constaté le
+        2026-09-05 — 79 offres fusionnées sans apparaître dans aucun compteur.
+        """
+        return max(0, self.survivantes - self.fusions)
 
     @property
     def sterile(self) -> bool:
@@ -160,6 +172,11 @@ class Releve:
         with self._verrou:
             self._ligne(racine(source)).survivantes += 1
 
+    def compter_fusion(self, source: str) -> None:
+        """Une offre supprimee par la deduplication (exacte ou floue)."""
+        with self._verrou:
+            self._ligne(racine(source)).fusions += 1
+
     def compter_rejet(self, source: str, motif: str) -> None:
         with self._verrou:
             rejets = self._ligne(racine(source)).rejets
@@ -207,7 +224,8 @@ class Releve:
             "sources": [
                 {
                     "nom": l.nom, "brut": l.brut, "normalisees": l.normalisees,
-                    "survivantes": l.survivantes, "rejets": dict(sorted(l.rejets.items())),
+                    "survivantes": l.survivantes, "fusions": l.fusions,
+                    "retenues": l.retenues, "rejets": dict(sorted(l.rejets.items())),
                     "incidents": [{"categorie": i.categorie, "detail": i.detail}
                                   for i in l.incidents],
                 }
@@ -281,6 +299,18 @@ def signaler(source: str, categorie: str, detail: str) -> None:
         releve.signaler(source, categorie, detail)
 
 
+def signaler_fusion(source: str) -> None:
+    """Une offre supprimee par la deduplication, sur le releve actif s'il existe.
+
+    Point d'entree de `dedup`. Sans lui, la colonne « gardees » — comptee par
+    `filters.filtrer`, donc AVANT la deduplication — annoncait des offres deja
+    supprimees : 79 disparitions sur 447 n'apparaissaient dans aucun compteur.
+    """
+    releve = _actif
+    if releve is not None:
+        releve.compter_fusion(source)
+
+
 def categorie_requests(err: Exception) -> tuple[str, str]:
     """Classe une exception `requests` en (catégorie, détail lisible).
 
@@ -316,8 +346,10 @@ def journaliser(releve: Releve | None = None) -> None:
     for ligne in releve.triees():
         a_detailler = bool(ligne.rejets or ligne.perdues_normalisation)
         logger.info(
-            "Source %-15s brut %4d -> normalisées %4d -> gardées %4d%s%s",
+            "Source %-15s brut %4d -> normalisées %4d -> gardées %4d "
+            "-> retenues %4d (dédup -%d)%s%s",
             ligne.nom, ligne.brut, ligne.normalisees, ligne.survivantes,
+            ligne.retenues, ligne.fusions,
             f"  ({_detail_rejets(ligne)})" if a_detailler else "",
             f"  [{len(ligne.incidents)} incident(s)]" if ligne.incidents else "",
         )
@@ -331,15 +363,17 @@ def rendre_tableau(releve: Releve | None = None) -> str:
     if releve is None:
         return ""
     lignes = [
-        f"{'source':16}{'brut':>7}{'normal.':>9}{'gardées':>9}   détail",
-        "─" * 78,
+        f"{'source':16}{'brut':>7}{'normal.':>9}{'gardées':>9}{'dédup':>7}"
+        f"{'retenues':>10}   détail",
+        "─" * 92,
     ]
     for l in releve.triees():
         detail = _detail_rejets(l) if (l.rejets or l.perdues_normalisation) else ""
         if l.incidents:
             causes = ", ".join(sorted({i.categorie for i in l.incidents}))
             detail = (detail + "  " if detail else "") + f"⚠ {len(l.incidents)} incident(s) [{causes}]"
-        lignes.append(f"{l.nom:16}{l.brut:7}{l.normalisees:9}{l.survivantes:9}   {detail}")
+        lignes.append(f"{l.nom:16}{l.brut:7}{l.normalisees:9}{l.survivantes:9}"
+                      f"{-l.fusions if l.fusions else 0:7}{l.retenues:10}   {detail}")
     alertes = releve.alertes()
     if alertes:
         lignes.append("")

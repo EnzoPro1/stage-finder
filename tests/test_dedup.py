@@ -90,9 +90,14 @@ def test_une_mention_seule_ne_vide_pas_le_titre():
 
 
 def test_dedup_floue_fusionne_vecteurs_proches():
+    # `company` IDENTIQUE des deux côtés : depuis le garde-fou d'identité
+    # (`dedup._identite_fusionnable`), un cosinus élevé ne suffit plus à
+    # fusionner — il faut aussi la même entreprise et la même commune.
+    # Ce test portait « Sanofi » / « Sanofi Group » ; ce cas-là a désormais
+    # son propre test, ci-dessous, et il NE fusionne plus.
     o1 = _offre("Stage IA chez Sanofi", company="Sanofi", url="http://1",
                 description="courte")
-    o2 = _offre("Stage IA chez Sanofi", company="Sanofi Group", url="http://2",
+    o2 = _offre("Stage IA chez Sanofi", company="Sanofi", url="http://2",
                 description="description plus longue donc plus riche")
     o3 = _offre("Stage Cyber", company="Autre", url="http://3")
     # Embeddings synthétiques normalisés : o1 et o2 quasi identiques, o3 orthogonal.
@@ -109,6 +114,26 @@ def test_dedup_floue_fusionne_vecteurs_proches():
     urls = {o.url for o in restantes}
     assert "http://2" in urls and "http://3" in urls
     assert "http://1" not in urls
+
+
+def test_sanofi_et_sanofi_group_ne_fusionnent_plus():
+    """Régression ASSUMÉE, documentée ici pour qu'elle ne surprenne personne.
+
+    Rapprocher « Sanofi » et « Sanofi Group » était la raison d'être annoncée
+    de la dédup floue. Le garde-fou d'identité l'a supprimée, et la mesure dit
+    pourquoi c'est le bon échange : accepter qu'un nom en contienne un autre
+    fusionnait « Tripletta Pizza - Latin » avec « Tripletta Pizza - Guy
+    Môquet », deux restaurants DIFFÉRENTS — et tous les arrondissements
+    parisiens partagent le code INSEE 75056, donc la commune ne les sépare pas.
+
+    Le coût de la non-fusion est une ligne en double ; le coût de la fusion
+    abusive est une offre réelle supprimée sans trace. On paie le premier.
+    """
+    o1 = _offre("Stage IA", company="Sanofi", url="http://1")
+    o2 = _offre("Stage IA", company="Sanofi Group", url="http://2")
+    emb = np.array([[1.0, 0.0], [1.0, 0.0]])   # cosinus = 1,0
+    restantes, _ = dedup.dedupliquer_flou([o1, o2], emb, seuil=0.9)
+    assert len(restantes) == 2
 
 
 def test_dedup_floue_seuil_haut_ne_fusionne_pas():

@@ -322,13 +322,36 @@ GARDER_SI_DATE_INCONNUE = False
 # 6) Déduplication floue par embeddings
 # ---------------------------------------------------------------------------
 # Après la dédup exacte (hash), on rapproche les quasi-doublons par similarité
-# cosinus des embeddings (déjà calculés pour le ranking) : deux offres dont les
-# vecteurs sont très proches sont considérées comme une seule (ex. « Sanofi » vs
-# « Sanofi Group »), sans lib de fuzzy string matching.
+# cosinus des embeddings (déjà calculés pour le ranking), sans lib de fuzzy
+# string matching.
+#
+# DEUX CONDITIONS, pas une. Le cosinus juge le TEXTE ; il est assorti d'une
+# condition d'identité (`dedup._identite_fusionnable`) : même entreprise, même
+# commune, mêmes horaires annoncés dans le titre. La raison est que
+# `ranker._texte_a_encoder` encode titre + description — ni l'entreprise ni le
+# lieu n'entrent dans le vecteur, donc deux annonces au même gabarit sont à
+# cosinus ~1 chez deux employeurs différents.
+#
+# Mesuré le 2026-09-05 sur 447 offres de type job étudiant : le cosinus seul
+# fusionnait 79 offres, dont 37 entre communes différentes et 22 entre
+# employeurs différents. Avec le garde-fou : 21 fusions, aucune des deux.
+#
+# CE QUI A ÉTÉ PERDU AU PASSAGE, et c'est assumé : « Sanofi » et « Sanofi
+# Group » ne se rapprochent plus (c'était l'exemple d'origine de ce réglage).
+# Accepter qu'un nom en contienne un autre ferait fusionner « Tripletta Pizza -
+# Latin » et « Tripletta Pizza - Guy Môquet », deux restaurants distincts que
+# la commune ne sépare pas — tous les arrondissements parisiens partagent le
+# code INSEE 75056. Une fusion manquée coûte une ligne en double ; une fusion
+# abusive supprime une offre réelle sans laisser de trace.
 DEDUP_FLOUE_ACTIVE = True
 
 # Seuil de cosinus au-delà duquel deux offres sont jugées quasi-identiques.
 # Volontairement haut (~0.9) pour ne fusionner que de vrais doublons.
+#
+# NE PAS le monter en espérant corriger les fusions abusives : mesuré, à 0.99
+# il restait 17 fusions entre employeurs distincts et 19 entre communes
+# distinctes. Un seuil ne sépare pas ce que le vecteur ne contient pas — c'est
+# le garde-fou d'identité qui s'en charge.
 SEUIL_DEDUP_FLOU = 0.90
 
 # ---------------------------------------------------------------------------

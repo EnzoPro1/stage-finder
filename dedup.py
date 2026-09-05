@@ -19,7 +19,9 @@ import unicodedata
 
 import numpy as np
 
+import communes
 import config
+import observabilite
 from normalize import Offre
 
 logger = logging.getLogger(__name__)
@@ -99,6 +101,24 @@ def _cle(offre: Offre) -> str:
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
 
+def _compter_fusions(avant: list[Offre], gardes_idx: list[int]) -> None:
+    """Attribue à leur source les offres supprimées par une passe de dédup.
+
+    La colonne « gardées » du bilan est comptée par `filters.filtrer`, qui
+    tourne AVANT la déduplication : sans cette attribution, une offre fusionnée
+    restait comptée comme gardée. Mesuré le 2026-09-05 : 79 disparitions sur
+    447 n'apparaissaient dans aucun compteur, ni dans les logs autrement que
+    par un total agrégé.
+
+    Attribution PAR SOURCE, et pas seulement en total : c'est le total sans
+    attribution qui a permis à ces 79 fusions de rester inexaminées.
+    """
+    restants = set(gardes_idx)
+    for i, offre in enumerate(avant):
+        if i not in restants:
+            observabilite.signaler_fusion(offre.source)
+
+
 def _richesse(offre: Offre) -> int:
     """Score de richesse d'une offre : plus c'est haut, plus l'offre est complète."""
     score = len(offre.description)
@@ -119,6 +139,10 @@ def dedupliquer(offres: list[Offre]) -> list[Offre]:
             meilleures[cle] = offre
 
     resultat = list(meilleures.values())
+    # Même angle mort que la passe floue : la dédup exacte tourne elle aussi
+    # APRÈS `filters.filtrer`, donc après le comptage des « gardées ».
+    gardees_idx = [i for i, o in enumerate(offres) if any(o is r for r in resultat)]
+    _compter_fusions(offres, gardees_idx)
     logger.info(
         "Déduplication : %d offre(s) unique(s) sur %d (%d doublon(s) retiré(s)).",
         len(resultat),
@@ -139,6 +163,65 @@ def dedupliquer(offres: list[Offre]) -> list[Offre]:
 #
 # Ordre efficace : le hash exact (rapide) filtre déjà le gros du volume ; cette
 # passe cosinus ne s'applique qu'au résidu.
+# Volume horaire annoncé DANS LE TITRE : « CDI 10H », « Equipier Polyvalent
+# 30H », « 24H / SEMAINE », « Temps Partiel 19h ». Bornes 1-40 pour écarter les
+# années et les codes postaux ; la garde négative écarte « 8h30 » (une heure de
+# la journée, pas un volume) et les nombres décimaux.
+_MOTIF_HEURES_TITRE = re.compile(r"(?<![\d,.])(\d{1,2})\s?[hH](?:\b|/|\s|$)(?!\d{2}\b)")
+
+
+def _heures_titre(titre: str) -> frozenset[int]:
+    """Volumes horaires hebdomadaires lisibles dans le titre. Vide si aucun."""
+    return frozenset(
+        int(x) for x in _MOTIF_HEURES_TITRE.findall(titre or "") if 1 <= int(x) <= 40
+    )
+
+
+def _identite_fusionnable(offre: Offre) -> tuple[str, str, frozenset[int]] | None:
+    """(entreprise, commune, heures du titre) — ou ``None`` si indéterminable.
+
+    Garde-fou de ``dedupliquer_flou``. Le cosinus est calculé sur
+    ``ranker._texte_a_encoder``, c'est-à-dire **titre + description** :
+    l'entreprise et le lieu n'entrent PAS dans le vecteur. Deux annonces au
+    même gabarit sont donc à cosinus ~1 même si elles n'ont ni le même
+    employeur ni la même ville — ce qui n'est pas un cas d'école :
+
+        SERVEUR H/F | Chez Justine   ~  Serveur H/F | Tripletta       cos 0.990
+        Equipier Polyvalent 30H | LIDL Fresnes ~ 35H | LIDL Esbly     cos 0.977
+        Vendeur(euse) en CDI 10H ~ Vendeur(euse) en CDI 35H | Lovisa  cos ~0.98
+
+    Le VOLUME HORAIRE du titre est la troisième composante, et elle est
+    indispensable : entreprise et commune ne suffisent pas, parce que les
+    fusions les plus coûteuses ont lieu chez le MÊME employeur dans la MÊME
+    commune. Mesuré le 2026-09-05, avec le garde-fou entreprise+commune seul,
+    5 fusions détruisaient encore l'horaire :
+
+        Vendeur(euse) en CDI 10H   ~  Vendeur(euse) en CDI 35H   | Lovisa, Paris
+        CDI 18H - Vendeur          ~  CDI 35H - Vendeur     | Petit Bateau, Paris
+        35h - Équipier Polyvalent  ~  30h/Semaine - Équipier | Hello You, Paris
+
+    Un poste à 10 h par semaine et un poste à 35 h ne sont pas la même offre —
+    et dans le mode `job_etudiant`, c'est précisément le champ qui décide. Deux
+    titres dont les horaires diffèrent ne fusionnent donc jamais ; un titre qui
+    annonce un horaire ne fusionne pas non plus avec un titre muet, par la même
+    asymétrie que ci-dessous.
+
+    ``None`` quand l'entreprise ou la commune manque : dans ce cas on NE FUSIONNE
+    PAS. L'asymétrie est délibérée — une fusion manquée coûte un doublon dans la
+    liste, une fusion abusive SUPPRIME une offre réelle sans laisser de trace.
+    C'est ce qui a sauvé la paire « Aide-soignant de JOUR » / « Aide-soignant de
+    NUIT », publiée sans nom d'entreprise et rapprochée à cosinus 0,999.
+    """
+    entreprise = _sans_accents((offre.company or "").lower()).strip()
+    entreprise = re.sub(r"[^a-z0-9]+", " ", entreprise).strip()
+    if not entreprise:
+        return None
+    commune = communes.cle_ville(offre.location or "")
+    if not commune:
+        return None
+    return entreprise, commune, _heures_titre(offre.title)
+
+
 def dedupliquer_flou(
     offres: list[Offre], embeddings: np.ndarray, seuil: float | None = None
 ) -> tuple[list[Offre], np.ndarray]:
@@ -147,21 +230,47 @@ def dedupliquer_flou(
     ``embeddings`` doit être aligné sur ``offres`` (même ordre) et NORMALISÉ
     (produit scalaire = cosinus). Retourne (offres_restantes, embeddings_alignés)
     pour que l'appelant puisse enchaîner le ranking sans ré-encoder.
+
+    ## Deux conditions, pas une
+
+    Le cosinus reste le test du TEXTE. Il est désormais assorti d'une condition
+    d'IDENTITÉ (``_identite_fusionnable``) : même entreprise ET même commune.
+    Mesuré le 2026-09-05 sur 447 offres de type job étudiant, le cosinus seul à
+    0,90 fusionnait 79 offres, dont **37 à travers des communes différentes** et
+    **22 à travers des employeurs différents**. Six fusions détruisaient
+    l'horaire annoncé dans le titre (« CDI 10H » absorbé par « CDI 35H »), et une
+    confondait un poste de jour avec le même poste de nuit, à cosinus 0,999.
+
+    Ce n'est pas un problème de seuil : à 0,99 il restait 17 fusions entre
+    employeurs distincts et 19 entre communes distinctes. Le seuil ne peut pas
+    séparer ce que le vecteur ne contient pas.
+
+    L'offre écartée est DÉTRUITE — elle n'atteint ni le ranking, ni la base, ni
+    les exports, et son URL est perdue. C'est ce qui justifie de faillir du côté
+    de la conservation.
     """
     seuil = config.SEUIL_DEDUP_FLOU if seuil is None else seuil
     emb = np.asarray(embeddings)
     if len(offres) <= 1:
         return offres, emb
 
+    identites = [_identite_fusionnable(o) for o in offres]
     gardes_idx: list[int] = []  # indices (dans `offres`) des offres conservées
     fusions = 0
+    refus_identite = 0
     for i, offre in enumerate(offres):
         doublon_de = None
         for pos, j in enumerate(gardes_idx):
             # Vecteurs normalisés -> cosinus = produit scalaire.
-            if float(emb[i] @ emb[j]) >= seuil:
-                doublon_de = pos
-                break
+            if float(emb[i] @ emb[j]) < seuil:
+                continue
+            # Texte quasi identique : reste à vérifier que c'est bien la même
+            # offre, et pas le même gabarit ailleurs.
+            if identites[i] is None or identites[i] != identites[j]:
+                refus_identite += 1
+                continue
+            doublon_de = pos
+            break
         if doublon_de is None:
             gardes_idx.append(i)
             continue
@@ -175,7 +284,9 @@ def dedupliquer_flou(
     emb_gardes = emb[gardes_idx] if gardes_idx else emb[:0]
     logger.info(
         "Déduplication floue (cos ≥ %.2f) : %d offre(s) restante(s), "
-        "%d quasi-doublon(s) fusionné(s).",
-        seuil, len(offres_gardees), fusions,
+        "%d quasi-doublon(s) fusionné(s), %d rapprochement(s) refusé(s) "
+        "(entreprise ou commune différente).",
+        seuil, len(offres_gardees), fusions, refus_identite,
     )
+    _compter_fusions(offres, gardes_idx)
     return offres_gardees, emb_gardes
