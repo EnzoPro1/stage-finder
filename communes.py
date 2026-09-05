@@ -336,6 +336,29 @@ def cle_ville(lieu: str) -> str:
     la forme normalisée du premier segment, c'est-à-dire l'ancien comportement
     débarrassé du préfixe de département. Deux offres hors région continuent
     donc de se dédoublonner entre elles.
+
+    ## ⚠ CETTE FONCTION N'EST PAS BRANCHÉE, ET C'EST DÉLIBÉRÉ
+
+    L'adopter dans ``dedup._cle`` est une MIGRATION DE CLÉ PRIMAIRE, pas un
+    réglage. Mesuré le 2026-09-05 : **544 des 570 clés de `stages.db`
+    changeraient (95 %)**, et les **57 étiquettes du corpus deviendraient
+    orphelines** — `evaluer_ranking.charger_corpus` les classerait toutes en
+    « clés incohérentes » et les exclurait, réduisant la baseline à zéro.
+
+    Le gain mesuré ne le paie pas : 11 groupes de doublons supplémentaires
+    seulement, dont 8 que `dedup.dedupliquer_flou` fusionne déjà. Soit **3
+    fusions nettes sur 448 offres**.
+
+    AVANT DE L'ADOPTER, il faut étendre ``migration_recalc_cles.py`` : son
+    ``_suivre_la_cle`` ne connaît que ``generation_jobs`` et ``offres_texte``.
+    Les deux tables créées depuis lui échappent :
+
+        etiquettes        (corpus de mesure — la seule donnée non régénérable)
+        feedback_events   (journal append-only, `offer_id`)
+
+    Une migration qui les oublierait détruirait le corpus sans rien afficher.
+    La fonction reste ici, testée et inutilisée, pour le jour où une raison
+    justifiera ce coût — et pour que ce paragraphe soit lu avant.
     """
     commune = resoudre(lieu)
     if commune is not None:
