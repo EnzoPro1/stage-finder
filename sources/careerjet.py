@@ -33,6 +33,7 @@ import requests
 from dotenv import load_dotenv
 
 import config
+import observabilite
 from sources import masquer_secrets
 
 load_dotenv()
@@ -80,6 +81,8 @@ def _chercher_une_page(terme: str, page: int) -> tuple[list[dict], int]:
         )
         reponse.raise_for_status()
     except requests.exceptions.RequestException as err:
+        categorie, detail = observabilite.categorie_requests(err)
+        observabilite.signaler(NOM_SOURCE, categorie, f"{detail} sur « {terme} » p.{page}")
         logger.warning(
             "Careerjet : échec de la requête pour « %s » (page %d) (%s)",
             terme, page, masquer_secrets(err),
@@ -89,6 +92,7 @@ def _chercher_une_page(terme: str, page: int) -> tuple[list[dict], int]:
     try:
         donnees = reponse.json()
     except ValueError:
+        observabilite.signaler(NOM_SOURCE, "format", f"réponse non-JSON sur « {terme} »")
         logger.warning("Careerjet : réponse non-JSON pour « %s »", terme)
         return [], 0
 
@@ -96,6 +100,8 @@ def _chercher_une_page(terme: str, page: int) -> tuple[list[dict], int]:
     # des offres, on ne les confond pas avec un résultat vide.
     type_reponse = donnees.get("type")
     if type_reponse != "JOBS":
+        observabilite.signaler(NOM_SOURCE, "format",
+                               f"réponse « {type_reponse} » sur « {terme} »")
         logger.warning(
             "Careerjet : réponse « %s » pour « %s » (%s)",
             type_reponse, terme, donnees.get("error", "sans détail"),
@@ -104,6 +110,7 @@ def _chercher_une_page(terme: str, page: int) -> tuple[list[dict], int]:
 
     jobs = donnees.get("jobs") or []
     if not isinstance(jobs, list):
+        observabilite.signaler(NOM_SOURCE, "format", f"structure inattendue sur « {terme} »")
         logger.warning("Careerjet : format inattendu pour « %s »", terme)
         return [], 0
 

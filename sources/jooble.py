@@ -23,6 +23,7 @@ import requests
 from dotenv import load_dotenv
 
 import config
+import observabilite
 from sources import masquer_secrets
 
 load_dotenv()
@@ -46,6 +47,8 @@ def _chercher_un_terme(cle: str, terme: str) -> list[dict]:
         reponse = requests.post(url, json=corps, timeout=config.TIMEOUT_HTTP)
         reponse.raise_for_status()
     except requests.exceptions.RequestException as err:
+        categorie, detail = observabilite.categorie_requests(err)
+        observabilite.signaler(NOM_SOURCE, categorie, f"{detail} sur « {terme} »")
         logger.warning(
             "Jooble : échec de la requête pour « %s » (%s)",
             terme,
@@ -56,11 +59,13 @@ def _chercher_un_terme(cle: str, terme: str) -> list[dict]:
     try:
         donnees = reponse.json()
     except ValueError:
+        observabilite.signaler(NOM_SOURCE, "format", f"réponse non-JSON sur « {terme} »")
         logger.warning("Jooble : réponse non-JSON pour « %s »", terme)
         return []
 
     jobs = donnees.get("jobs", [])
     if not isinstance(jobs, list):
+        observabilite.signaler(NOM_SOURCE, "format", f"structure inattendue sur « {terme} »")
         logger.warning("Jooble : format inattendu pour « %s »", terme)
         return []
 
@@ -72,6 +77,7 @@ def recuperer_offres() -> list[dict]:
     """Agrège les offres brutes Jooble sur tous les termes de recherche."""
     cle = _cle_disponible()
     if not cle:
+        observabilite.signaler(NOM_SOURCE, "cle_absente", "JOOBLE_API_KEY absente du .env")
         logger.warning("Jooble ignorée : JOOBLE_API_KEY absente du .env.")
         return []
 

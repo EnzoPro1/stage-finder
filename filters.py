@@ -23,6 +23,7 @@ from datetime import date, datetime
 from dateutil import parser as dateparser
 
 import config
+import observabilite
 from normalize import Offre
 
 logger = logging.getLogger(__name__)
@@ -96,23 +97,39 @@ def est_recente(offre: Offre) -> bool:
 
 
 def filtrer(offres: list[Offre]) -> list[Offre]:
-    """Applique tous les filtres durs et loggue le détail des rejets."""
+    """Applique tous les filtres durs et loggue le détail des rejets.
+
+    Le décompte est tenu DEUX fois, et ce n'est pas une redondance : le total
+    par motif répond à « qu'est-ce que les filtres éliminent ? », le décompte
+    par SOURCE répond à « quelle source est en train de ne rien rapporter ? ».
+    Seul le second aurait montré que Jooble rendait 86 offres pour 0 gardée
+    (cf. `observabilite`) — le total par motif, lui, noyait ces 86 dans les
+    milliers d'offres hors-stage de l'ensemble du run.
+    """
     gardees: list[Offre] = []
     rejets = {"hors-stage": 0, "exclu": 0, "hors-IDF": 0, "trop-vieux": 0}
+    releve = observabilite.actif()
+
+    def rejeter(offre: Offre, motif: str) -> None:
+        rejets[motif] += 1
+        if releve is not None:
+            releve.compter_rejet(offre.source, motif)
 
     for offre in offres:
         if not est_un_stage(offre):
-            rejets["hors-stage"] += 1
+            rejeter(offre, "hors-stage")
             continue
         if est_exclu(offre):
-            rejets["exclu"] += 1
+            rejeter(offre, "exclu")
             continue
         if not est_en_idf(offre):
-            rejets["hors-IDF"] += 1
+            rejeter(offre, "hors-IDF")
             continue
         if not est_recente(offre):
-            rejets["trop-vieux"] += 1
+            rejeter(offre, "trop-vieux")
             continue
+        if releve is not None:
+            releve.compter_survivante(offre.source)
         gardees.append(offre)
 
     total_rejets = sum(rejets.values())

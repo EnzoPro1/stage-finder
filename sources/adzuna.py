@@ -23,6 +23,7 @@ import requests
 from dotenv import load_dotenv
 
 import config
+import observabilite
 from sources import masquer_secrets
 
 # Charge le .env dès l'import (idempotent).
@@ -59,6 +60,8 @@ def _chercher_un_terme(app_id: str, app_key: str, terme: str) -> list[dict]:
     except requests.exceptions.RequestException as err:
         # Timeout, DNS, 4xx/5xx, réseau coupé... on loggue et on continue.
         # masquer_secrets() évite que la clé API n'apparaisse dans l'URL loggée.
+        categorie, detail = observabilite.categorie_requests(err)
+        observabilite.signaler(NOM_SOURCE, categorie, f"{detail} sur « {terme} »")
         logger.warning(
             "Adzuna : échec de la requête pour « %s » (%s)",
             terme,
@@ -69,11 +72,13 @@ def _chercher_un_terme(app_id: str, app_key: str, terme: str) -> list[dict]:
     try:
         donnees = reponse.json()
     except ValueError:
+        observabilite.signaler(NOM_SOURCE, "format", f"réponse non-JSON sur « {terme} »")
         logger.warning("Adzuna : réponse non-JSON pour « %s »", terme)
         return []
 
     resultats = donnees.get("results", [])
     if not isinstance(resultats, list):
+        observabilite.signaler(NOM_SOURCE, "format", f"structure inattendue sur « {terme} »")
         logger.warning("Adzuna : format inattendu pour « %s »", terme)
         return []
 
@@ -90,6 +95,8 @@ def recuperer_offres() -> list[dict]:
     """
     app_id, app_key = _cles_disponibles()
     if not app_id or not app_key:
+        observabilite.signaler(NOM_SOURCE, "cle_absente",
+                               "ADZUNA_APP_ID / ADZUNA_APP_KEY absents du .env")
         logger.warning(
             "Adzuna ignorée : ADZUNA_APP_ID / ADZUNA_APP_KEY absents du .env."
         )

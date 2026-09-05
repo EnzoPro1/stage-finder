@@ -25,6 +25,7 @@ import time
 import pandas as pd
 
 import config
+import observabilite
 
 # L'import de jobspy peut être lourd ; on le protège pour un message clair.
 try:
@@ -66,6 +67,8 @@ def _scraper(site: str, terme: str) -> list[dict]:
             verbose=0,
         )
     except Exception as err:  # noqa: BLE001 - blocage, captcha, rate-limit, réseau...
+        categorie, detail = observabilite.categorie_requests(err)
+        observabilite.signaler(NOM_SOURCE, categorie, f"{site} : {detail} sur « {terme} »")
         logger.warning("JobSpy[%s] : échec pour « %s » (%s)", site, terme, err)
         return []
 
@@ -83,6 +86,7 @@ def _scraper(site: str, terme: str) -> list[dict]:
 def recuperer_offres() -> list[dict]:
     """Agrège les offres brutes JobSpy sur tous les sites et tous les termes."""
     if scrape_jobs is None:
+        observabilite.signaler(NOM_SOURCE, "import", str(_ERREUR_IMPORT))
         logger.warning("JobSpy indisponible (import impossible : %s).", _ERREUR_IMPORT)
         return []
 

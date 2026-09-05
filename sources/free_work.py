@@ -27,6 +27,7 @@ import logging
 import requests
 
 import config
+import observabilite
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +60,15 @@ def _chercher_une_page(page: int) -> list[dict]:
         )
         reponse.raise_for_status()
     except requests.exceptions.RequestException as err:
+        categorie, detail = observabilite.categorie_requests(err)
+        observabilite.signaler(NOM_SOURCE, categorie, f"{detail} p.{page}")
         logger.warning("Free-Work : échec de la requête (page %d) (%s)", page, err)
         return []
 
     try:
         donnees = reponse.json()
     except ValueError:
+        observabilite.signaler(NOM_SOURCE, "format", f"réponse non-JSON p.{page}")
         logger.warning("Free-Work : réponse non-JSON (page %d).", page)
         return []
 
@@ -73,6 +77,7 @@ def _chercher_une_page(page: int) -> list[dict]:
     if isinstance(donnees, dict):
         donnees = donnees.get("hydra:member") or donnees.get("member") or []
     if not isinstance(donnees, list):
+        observabilite.signaler(NOM_SOURCE, "format", f"structure inattendue p.{page}")
         logger.warning("Free-Work : format inattendu (page %d).", page)
         return []
     return donnees

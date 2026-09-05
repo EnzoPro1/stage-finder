@@ -30,6 +30,7 @@ from normalize import Offre, normaliser
 from filters import filtrer
 import dedup
 import extract
+import observabilite
 import ranker
 import report
 import storage
@@ -60,13 +61,23 @@ def _collecter_source(source: registry.Source) -> list[Offre]:
     Toute erreur est absorbée ici — Y COMPRIS l'import du module de la source,
     qui est paresseux et peut échouer (dépendance manquante) : une source qui
     tombe renvoie [] sans entamer les autres.
+
+    L'absorption reste entière ; ce qui change est qu'elle laisse une TRACE
+    (``observabilite``). Une source qui rend [] parce qu'elle est tombée et
+    une source qui rend [] parce que le marché est vide s'écrivaient pareil.
     """
     try:
         brutes = source.recuperer()()
     except Exception as err:  # noqa: BLE001 - une source ne doit jamais tout casser
+        observabilite.signaler(source.nom, "import", f"{type(err).__name__}: {err}")
         logger.warning("Source « %s » en échec complet : %s", source.nom, err)
         return []
-    return normaliser(source.nom, brutes)
+    offres = normaliser(source.nom, brutes)
+    releve = observabilite.actif()
+    if releve is not None:
+        releve.compter_brut(source.nom, len(brutes))
+        releve.compter_normalisees(source.nom, len(offres))
+    return offres
 
 
 def collecter(utiliser_jobspy: bool) -> list[Offre]:
@@ -87,6 +98,11 @@ def collecter(utiliser_jobspy: bool) -> list[Offre]:
     if not utiliser_jobspy:
         # --no-jobspy / mode « rapide » : on saute tout ce qui scrape.
         actives = [s for s in actives if not s.sequentiel]
+
+    # Relevé posé AVANT le premier appel et amorcé avec les sources attendues :
+    # une source qui échoue dès l'import doit apparaître en panne dans le
+    # tableau, pas en être absente.
+    observabilite.demarrer([s.nom for s in actives])
 
     api = [s for s in actives if not s.sequentiel]
     scraping = [s for s in actives if s.sequentiel]
@@ -182,6 +198,13 @@ def collecter_et_classer(utiliser_jobspy: bool) -> list[tuple[Offre, float]]:
         return []
 
     offres = filtrer(offres)
+    # Bilan par source : il ne peut être rendu qu'ICI, après les filtres — les
+    # survivantes ne sont connues qu'une fois `filtrer` passé — et il doit
+    # l'être ici plutôt que dans `executer`, parce que c'est le seul point que
+    # traversent les DEUX portes d'entrée (CLI et app web). Même raisonnement
+    # que `storage.enregistrer_run` pour le texte des offres.
+    observabilite.journaliser()
+
     extract.annoter_toutes(offres)
     offres = dedup.dedupliquer(offres)
     if not offres:
@@ -292,6 +315,14 @@ def executer(args: argparse.Namespace) -> None:
 
     # 1-6) Collecte -> ... -> Ranking cosinus (sans IA)
     classees = collecter_et_classer(utiliser_jobspy=not args.no_jobspy)
+
+    # Bilan par source, IMPRIMÉ avant tout retour anticipé : c'est justement
+    # quand le run ne rend rien qu'on a besoin de savoir laquelle des sources
+    # n'a rien rapporté, et pourquoi.
+    tableau = observabilite.rendre_tableau()
+    if tableau:
+        print(f"\n{'='*78}\n BILAN PAR SOURCE\n{'='*78}\n{tableau}\n")
+
     if not classees:
         logger.warning("Aucune offre à classer.")
         return

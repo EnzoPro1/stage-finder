@@ -32,6 +32,7 @@ import requests
 from dotenv import load_dotenv
 
 import config
+import observabilite
 
 load_dotenv()
 
@@ -121,6 +122,11 @@ def _obtenir_token(client_id: str, client_secret: str, scope: str | None = None)
     except (requests.exceptions.RequestException, ValueError) as err:
         # On ne loggue pas `err` brut : l'exception requests peut embarquer l'URL,
         # mais surtout on veut éviter toute fuite de corps de requête.
+        categorie, detail = observabilite.categorie_requests(err)
+        # L'authentification est un cas à part : « auth » dit qu'il faut
+        # renouveler des identifiants, là où « http 500 » dit d'attendre.
+        observabilite.signaler(NOM_SOURCE, "auth" if categorie == "http" else categorie,
+                               f"authentification : {detail}")
         logger.warning("France Travail : échec d'authentification (%s).", type(err).__name__)
         return None
 
@@ -149,6 +155,8 @@ def _chercher_un_terme(token: str, terme: str) -> list[dict]:
             timeout=config.TIMEOUT_HTTP,
         )
     except requests.exceptions.RequestException as err:
+        categorie, detail = observabilite.categorie_requests(err)
+        observabilite.signaler(NOM_SOURCE, categorie, f"{detail} sur « {terme} »")
         logger.warning("France Travail : échec réseau pour « %s » (%s).", terme, type(err).__name__)
         return []
 
@@ -162,6 +170,8 @@ def _chercher_un_terme(token: str, terme: str) -> list[dict]:
         # maximum autorisé est de 5 »). Sans ça, un 400 est indébuggable.
         # Le corps d'une réponse de recherche ne contient jamais de secret ; le
         # RedactingFilter reste posé sur le handler par sécurité.
+        observabilite.signaler(NOM_SOURCE, "http",
+                               f"HTTP {reponse.status_code} sur « {terme} »")
         logger.warning(
             "France Travail : statut %s pour « %s » — %s",
             reponse.status_code, terme, reponse.text[:200].strip() or "(corps vide)",
@@ -171,11 +181,13 @@ def _chercher_un_terme(token: str, terme: str) -> list[dict]:
     try:
         donnees = reponse.json()
     except ValueError:
+        observabilite.signaler(NOM_SOURCE, "format", f"réponse non-JSON sur « {terme} »")
         logger.warning("France Travail : réponse non-JSON pour « %s ».", terme)
         return []
 
     resultats = donnees.get("resultats", [])
     if not isinstance(resultats, list):
+        observabilite.signaler(NOM_SOURCE, "format", f"structure inattendue sur « {terme} »")
         logger.warning("France Travail : format inattendu pour « %s ».", terme)
         return []
 
@@ -262,6 +274,8 @@ def recuperer_offres() -> list[dict]:
     """Agrège les offres brutes France Travail sur tous les termes de recherche."""
     client_id, client_secret = _identifiants()
     if not client_id or not client_secret:
+        observabilite.signaler(NOM_SOURCE, "cle_absente",
+                               "FRANCE_TRAVAIL_ID / FRANCE_TRAVAIL_KEY absents du .env")
         logger.warning(
             "France Travail ignorée : FRANCE_TRAVAIL_ID / FRANCE_TRAVAIL_KEY "
             "absents du .env."
@@ -270,6 +284,10 @@ def recuperer_offres() -> list[dict]:
 
     token = obtenir_jeton()
     if not token:
+        # `_obtenir_token` a déjà signalé les échecs qu'il voit passer ; ce
+        # signal-ci couvre le cas restant — une réponse 200 SANS access_token,
+        # qui sortait d'ici en `[]` muet, indiscernable d'un marché vide.
+        observabilite.signaler(NOM_SOURCE, "auth", "jeton OAuth2 indisponible")
         return []
 
     toutes: list[dict] = []
