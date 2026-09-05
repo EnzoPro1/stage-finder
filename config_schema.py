@@ -39,6 +39,9 @@ class ConfigModel(BaseModel):
 
     # --- Sources ---
     SOURCES_ACTIVES: list[str] = Field(min_length=1)
+    ADZUNA_TITRE_EXIGE: str = Field(min_length=1)
+    ADZUNA_TERMES_DOMAINE: str = Field(min_length=1)
+    ADZUNA_PAGES: int = Field(gt=0, le=20)
     CAREERJET_PAGES: int = Field(gt=0, le=20)
     CAREERJET_LOCALE: str = Field(min_length=2)
     FREE_WORK_PAGES: int = Field(gt=0, le=20)

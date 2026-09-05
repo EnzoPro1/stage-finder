@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 # Nom canonique de la source (utilisé partout dans le pipeline).
 NOM_SOURCE = "adzuna"
 
-_BASE_URL = "https://api.adzuna.com/v1/api/jobs/fr/search/1"
+# La PAGE est ajoutée au chemin : .../search/{page}.
+_BASE_URL = "https://api.adzuna.com/v1/api/jobs/fr/search"
 
 
 def _cles_disponibles() -> tuple[str | None, str | None]:
@@ -42,20 +43,44 @@ def _cles_disponibles() -> tuple[str | None, str | None]:
     return os.getenv("ADZUNA_APP_ID"), os.getenv("ADZUNA_APP_KEY")
 
 
-def _chercher_un_terme(app_id: str, app_key: str, terme: str) -> list[dict]:
-    """Interroge Adzuna pour un seul terme de recherche."""
+def _chercher_une_page(app_id: str, app_key: str, page: int) -> list[dict]:
+    """Interroge UNE page Adzuna, sur la requête « stage + domaine ».
+
+    ## Pourquoi cette source n'utilise pas ``config.TERMES_RECHERCHE``
+
+    Le paramètre ``what`` d'Adzuna est CONJONCTIF : il exige tous les mots. Les
+    termes du projet en font 3 à 4 (« stage intelligence artificielle »), et
+    aucune annonce française ne les contient tous. Mesuré le 2026-09-05, à
+    Paris, sur ce terme : 0 offre avec la fenêtre de 7 jours, 4 sans la
+    fenêtre, 43 sans ``where``. Les cinq termes réunis rapportaient 2 offres,
+    et la source pesait 6 lignes dans `stages.db` en sept semaines.
+
+    On demande donc la même chose autrement : ``title_only`` pour exiger le mot
+    « stage » DANS LE TITRE — ce que `filters.est_un_stage` exigera de toute
+    façon, si bien que la requête et le filtre cessent de se contredire — et
+    ``what_or`` pour les termes de domaine, en OU au lieu d'un ET impossible.
+
+    L'API répond **400 (et non 429)** quand elle étrangle, avec une page HTML.
+    ``raise_for_status`` en fait une ``RequestException``, désormais tracée en
+    ``http: HTTP 400`` par ``observabilite`` au lieu de disparaître dans un
+    ``[]`` muet.
+    """
     params = {
         "app_id": app_id,
         "app_key": app_key,
         "results_per_page": config.RESULTATS_PAR_TERME,
-        "what": terme,
+        "title_only": config.ADZUNA_TITRE_EXIGE,
+        "what_or": config.ADZUNA_TERMES_DOMAINE,
         "where": config.LIEU,
         # Fraîcheur poussée côté API : offres publiées dans les N derniers jours.
         "max_days_old": config.JOURS_FRAICHEUR,
         "content-type": "application/json",
     }
+    terme = f"{config.ADZUNA_TITRE_EXIGE} + domaine (page {page})"
     try:
-        reponse = requests.get(_BASE_URL, params=params, timeout=config.TIMEOUT_HTTP)
+        reponse = requests.get(
+            f"{_BASE_URL}/{page}", params=params, timeout=config.TIMEOUT_HTTP
+        )
         reponse.raise_for_status()
     except requests.exceptions.RequestException as err:
         # Timeout, DNS, 4xx/5xx, réseau coupé... on loggue et on continue.
@@ -103,8 +128,14 @@ def recuperer_offres() -> list[dict]:
         return []
 
     toutes: list[dict] = []
-    for terme in config.TERMES_RECHERCHE:
-        toutes.extend(_chercher_un_terme(app_id, app_key, terme))
+    for page in range(1, config.ADZUNA_PAGES + 1):
+        lot = _chercher_une_page(app_id, app_key, page)
+        toutes.extend(lot)
+        # Page incomplète = dernière page : inutile d'en demander une de plus.
+        # C'est aussi le comportement en cas d'étranglement (lot vide), ce qui
+        # évite d'insister sur une API qui vient de refuser.
+        if len(lot) < config.RESULTATS_PAR_TERME:
+            break
 
     logger.info("Adzuna : %d offre(s) brute(s) au total.", len(toutes))
     return toutes

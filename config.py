@@ -87,6 +87,41 @@ SOURCES_ACTIVES = [
     "jobspy",
 ]
 
+# --- Adzuna : construction de la requête ------------------------------------
+# Adzuna N'INTERROGE PAS `TERMES_RECHERCHE`, et c'est délibéré. Son paramètre
+# `what` est CONJONCTIF : il exige TOUS les mots. Or les termes de recherche
+# font 3 à 4 mots (« stage intelligence artificielle »), et aucune annonce
+# française ne les contient tous. Ablation mesurée le 2026-09-05, à Paris :
+#
+#   what='stage intelligence artificielle' + fenêtre 7 j ....      0
+#   idem sans la fenêtre de fraîcheur .......................      4
+#   idem sans `where` .......................................     43
+#   what='stage' (trop large : tous domaines) ............... 1 276
+#
+# Les cinq termes réunis rapportaient 2 offres. La requête est donc reformulée
+# SANS changer ce qu'on demande — un stage, du domaine IA/data/cyber, à Paris :
+#
+#   title_only  le mot doit être DANS LE TITRE. C'est exactement ce que
+#               `filters.est_un_stage` exige ensuite : la requête et le filtre
+#               cessent de se contredire, et plus aucune offre ne meurt là.
+#   what_or     les termes de domaine en OU, au lieu d'un ET impossible.
+#
+# Mesuré sur cette forme : 100 offres brutes rapatriées, 100 gardées par les
+# filtres durs (aucune perte), dont 17 portant un tag IA/cyber.
+ADZUNA_TITRE_EXIGE = "stage"
+
+# Termes de domaine, en OU. Volontairement LARGES : le projet ratisse large et
+# laisse le ranking trier. Élargir ici fait entrer du bruit (finance, marketing,
+# juridique qui mentionnent « data »), que le cosinus et la vérification LLM
+# déclassent ensuite — c'est le compromis assumé du pipeline.
+ADZUNA_TERMES_DOMAINE = (
+    "intelligence artificielle machine learning deep learning cybersécurité "
+    "data science données sécurité"
+)
+
+# Nombre de pages Adzuna parcourues (RESULTATS_PAR_TERME offres par page).
+ADZUNA_PAGES = 4
+
 # Careerjet : nombre de pages parcourues PAR TERME de recherche (30 offres par
 # page). 2 pages x 5 termes = jusqu'à 300 offres brutes, largement de quoi
 # alimenter les filtres sans faire traîner la collecte.
