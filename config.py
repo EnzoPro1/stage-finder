@@ -56,14 +56,31 @@ RESULTATS_PAR_TERME = 30
 # pas la clé API correspondante, ou si une source est trop lente).
 #
 #   adzuna         API, clé requise    — agrégateur généraliste
-#   jooble         API, clé requise    — agrégateur généraliste
+#   jooble         API, clé requise    — DÉSACTIVÉE, voir ci-dessous
 #   france_travail API, clé requise    — gisement public français
 #   careerjet      API, sans clé       — méta-moteur (des centaines de sites FR)
 #   free_work      API, sans clé       — job board tech/IT français
 #   jobspy         scraping, sans clé  — Indeed / LinkedIn / Google Jobs
+#
+# JOOBLE EST RETIRÉE, et son module reste au catalogue (`sources/registry.py`)
+# pour qu'on puisse la retester sans la réécrire.
+#
+# Mesuré le 2026-09-05 : son paramètre `location: "Paris"` est résolu par l'API
+# en **Paris, Texas**. 86 offres sur 86 américaines — « Director, Solutions
+# Engineering », « CDL A Truck Driver », « Machine Learning Engineer » à
+# Powderly, Telephone et Arthur City, Texas. Bilan sur toute l'historique du
+# projet (2026-07-14 → 09-01) : 0 offre Jooble dans `stages.db`, 0 dans le
+# corpus étiqueté.
+#
+# Ce qui protégeait le pipeline n'était pas la géographie mais le filtre de
+# TITRE : 84 des 86 mouraient sur « pas un stage », et 2 seulement
+# atteignaient le filtre de lieu. Le mode `job_etudiant` relâchera ce filtre de
+# titre — la source deviendrait alors franchement dangereuse.
+#
+# L'API répond en outre 403 après quelques dizaines d'appels, ce que
+# l'adaptateur convertissait en `[]` muet (corrigé depuis : `observabilite`).
 SOURCES_ACTIVES = [
     "adzuna",
-    "jooble",
     "france_travail",
     "careerjet",
     "free_work",
