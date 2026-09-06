@@ -58,11 +58,39 @@ class Offre:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# Échappements Unicode AMPUTÉS DE LEUR ANTISLASH, tels qu'Adzuna les livre :
+# « Hu002FF » pour « H/F », « césure u002F fin d'étude », « pru00e9-embauche ».
+# Mesuré le 2026-09-05 sur 100 offres Adzuna : u00e9 (é) ×10, u002F (/) ×5,
+# u00e8 (è) ×5, u00e0 (à) ×2, u00a0 (espace insécable) ×1 — dans les titres ET
+# les descriptions.
+#
+# Ce n'est pas cosmétique. `dedup._normaliser_titre` retire les mentions de
+# genre pour que « (H/F) » et « (M/F) » produisent UNE clé ; « Hu002FF » n'est
+# pas reconnu comme une mention de genre, donc la même annonce republiée dans
+# les deux formes occupe deux lignes. Le correctif de déduplication du commit
+# précédent était neutralisé sur ces titres-là.
+#
+# LA PLAGE EST VOLONTAIREMENT LIMITÉE À `u00XX`, et pas au `uXXXX` général :
+# sans l'antislash, le motif large mordrait sur des mots français ordinaires.
+# « aubade » contient « ubade », dont les quatre caractères sont des chiffres
+# hexadécimaux valides — il deviendrait « a뫞 ». Exiger les deux zéros
+# rend la collision impossible en pratique (aucun mot ne contient « u00 ») et
+# couvre 100 % de ce qui a été observé : Adzuna n'émet que du Latin-1.
+_MOTIF_ECHAPPEMENT = re.compile(r"u00([0-9a-fA-F]{2})")
+
+
+def _desechapper(texte: str) -> str:
+    """Restaure les caractères des échappements amputés (« u002F » -> « / »)."""
+    if "u00" not in texte:
+        return texte
+    return _MOTIF_ECHAPPEMENT.sub(lambda m: chr(int(m.group(1), 16)), texte)
+
+
 def _texte(valeur) -> str:
     """Convertit proprement une valeur potentiellement None en chaîne nettoyée."""
     if valeur is None:
         return ""
-    return str(valeur).strip()
+    return _desechapper(str(valeur)).strip()
 
 
 # Balises HTML + entités : plusieurs sources livrent leur description en HTML

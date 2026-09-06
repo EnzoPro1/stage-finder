@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+import normalize
 from normalize import Offre, normaliser
 
 
@@ -104,3 +107,58 @@ def test_item_sans_titre_ou_url_est_ignore():
 
 def test_source_inconnue_renvoie_vide():
     assert normaliser("inconnue", [{"title": "x"}]) == []
+
+# ---------------------------------------------------------------------------
+# Échappements Unicode amputés (Adzuna)
+#
+# Adzuna livre « Hu002FF » là où l'annonce dit « H/F » : l'antislash de
+# l'échappement JSON a disparu quelque part en amont. Ce n'est pas qu'un
+# problème d'affichage — `dedup._normaliser_titre` retire les mentions de genre
+# pour que « (H/F) » et « (M/F) » donnent UNE clé, et « Hu002FF » n'est pas
+# reconnu comme telle. La même annonce occupait donc deux lignes.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("brut, attendu", [
+    ("Hu002FF", "H/F"),
+    ("Data Scientist (Hu002FF) - Core platform", "Data Scientist (H/F) - Core platform"),
+    ("Stage de césure u002F fin d'étude", "Stage de césure / fin d'étude"),
+    ("Consultant.e Cybergouvernance u002F Cybersécurité",
+     "Consultant.e Cybergouvernance / Cybersécurité"),
+    ("pru00e9-embauche", "pré-embauche"),          # é
+    ("compu00e8tences", "compètences"),            # è
+    ("u00e0 pourvoir", "à pourvoir"),              # à
+])
+def test_les_echappements_ampute_sont_restaures(brut, attendu):
+    assert normalize._texte(brut) == attendu
+
+
+def test_un_mot_francais_ordinaire_n_est_pas_massacre():
+    """Le motif large `uXXXX` mordrait sur « aubade » : « ubade » est composé
+    de quatre chiffres hexadécimaux valides. C'est la raison pour laquelle
+    seul `u00XX` est décodé."""
+    for mot in ("aubade", "cubade", "adubade", "une facade", "aubaine"):
+        assert normalize._texte(mot) == mot
+
+
+def test_une_url_traverse_sans_dommage():
+    url = "https://www.adzuna.fr/details/5870794318?utm_medium=api&utm_source=4d2c2076"
+    assert normalize._texte(url) == url
+
+
+def test_le_desechappement_atteint_le_titre_et_la_description():
+    offres = normalize.normaliser("adzuna", [{
+        "title": "Stage - Consultant cybersécurité SECOP - PKI - Hu002FF",
+        "company": {"display_name": "Synetis"},
+        "location": {"display_name": "Paris"},
+        "description": "Mission de pru00e9-embauche u002F CDI.",
+        "redirect_url": "http://x",
+    }])
+    assert offres[0].title.endswith("PKI - H/F")
+    assert offres[0].description == "Mission de pré-embauche / CDI."
+
+
+def test_la_mention_de_genre_redevient_deduplicable():
+    """Le vrai enjeu : `dedup` doit retrouver la mention de genre après coup."""
+    import dedup
+
+    brut = normalize._texte("Data Scientist (Hu002FF)")
+    assert dedup._normaliser_titre(brut) == dedup._normaliser_titre("Data Scientist (H/F)")
