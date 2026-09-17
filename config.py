@@ -301,6 +301,14 @@ SOURCES_ECARTEES_JOBS = {
 # d'évaluation du ranking. Le rapport unifié lit les deux bases.
 CHEMIN_BASE_JOBS = Path("jobs_etudiants.db")
 
+# Fraîcheur des jobs étudiants, en jours — SÉPARÉE de JOURS_FRAICHEUR (stages).
+# Une annonce de job étudiant reste ouverte plus longtemps : au run du
+# 2026-09-17 à 7 jours, Careerjet perdait 279 offres sur 420 pour ancienneté.
+# Poussée côté API là où elle existe (France Travail `publieeDepuis`, Indeed
+# `hours_old`), appliquée par le filtre partout. Le rapport affiche l'âge de
+# chaque offre pour trier ou ignorer les plus anciennes.
+JOURS_FRAICHEUR_JOBS = 21
+
 # Mots de contrat qui, dans le TITRE, marquent une alternance. Les jobs
 # étudiants ne l'EXCLUENT pas : l'offre reste, avec un drapeau « alternance ».
 MOTS_CLES_ALTERNANCE = [

@@ -41,6 +41,7 @@ from datetime import datetime
 from pathlib import Path
 
 import config
+import filters
 import recherche
 import storage
 
@@ -54,6 +55,13 @@ class Section:
     titre: str
     run: dict | None
     offres: list[dict] = field(default_factory=list)
+
+
+def _date_du_run(run: dict):
+    try:
+        return datetime.fromisoformat(run["horodatage"]).date()
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 def charger_section(titre: str, chemin_base) -> Section:
@@ -82,6 +90,10 @@ def charger_section(titre: str, chemin_base) -> Section:
             o["trajets"] = {}
         dates = [d for d in [o.get("premiere_vue")] + [l["premiere_vue"] for l in o["liens"]] if d]
         o["premiere_vue"] = min(dates) if dates else ""
+        # Âge de l'ANNONCE (date de publication de la source) au jour du run —
+        # pas l'âge dans la base : c'est la fraîcheur de l'offre qui compte.
+        o["age_jours"] = filters.age_jours(o.get("posted_at") or "",
+                                           _date_du_run(run))
     return Section(titre, run, offres)
 
 
@@ -165,6 +177,11 @@ def _etiquettes_html(offre: dict, libelles: dict[str, str]) -> str:
     return f'<div class="tags">{"".join(puces)}</div>' if puces else ""
 
 
+def _age_html(offre: dict) -> str:
+    age = offre.get("age_jours")
+    return '<td class="num age">—</td>' if age is None else f'<td class="num age">{max(age, 0)} j</td>'
+
+
 def _neuf(offre: dict) -> str:
     return '<span class="neuf">nouveau</span> ' if offre["nouvelle"] else ""
 
@@ -183,7 +200,7 @@ def section_stages(section: Section, libelles: dict[str, str]) -> str:
             f'<td class="titre">{_neuf(o)}{_e(o["title"])}{_etiquettes_html(o, libelles)}</td>'
             f'<td>{_e(o["company"]) or "—"}</td><td>{_e(o["location"]) or "—"}</td>'
             f'<td class="liens">{_liens_html(o)}</td>'
-            f'<td class="date">{_e(o["premiere_vue"])}</td>'
+            f'<td class="date">{_e(o["premiere_vue"])}</td>{_age_html(o)}'
             f'<td class="num">{(o.get("dernier_score") or 0):.3f}</td></tr>')
     return f"""
 <section id="stages">
@@ -195,7 +212,7 @@ def section_stages(section: Section, libelles: dict[str, str]) -> str:
     <label><input type="checkbox" class="elargir"> inclure les familles absentes du titre</label>
   </div>
   <div class="defile"><table id="table-stages">
-    <thead><tr><th>Offre</th><th>Employeur</th><th>Lieu</th><th>Liens</th><th>Vue le</th><th>Score</th></tr></thead>
+    <thead><tr><th>Offre</th><th>Employeur</th><th>Lieu</th><th>Liens</th><th>Vue le</th><th>Âge</th><th>Score</th></tr></thead>
     <tbody>{"".join(lignes)}</tbody>
   </table></div>
 </section>"""
@@ -223,24 +240,26 @@ def section_jobs(section: Section, libelles: dict[str, str], origines: dict[str,
             cellules.append(f'<td class="trajet">{t["brut_min"]:.0f} → <strong>{t["ajuste_min"]:.0f}</strong> min{estim}</td>')
         meilleur = _meilleur(o)
         attributs.append(f'data-meilleur="{meilleur if meilleur is not None else ""}"')
+        age = o.get("age_jours")
+        attributs.append(f'data-age="{max(age, 0) if age is not None else ""}"')
         lignes.append(
             f'<tr {" ".join(attributs)}>'
             f'<td class="titre">{_neuf(o)}{_e(o["title"])}{_etiquettes_html(o, libelles)}</td>'
             f'<td>{_e(o["company"]) or "—"}</td><td>{_e(o["location"]) or "—"}</td>'
             f'<td class="liens">{_liens_html(o)}</td>'
-            f'<td class="date">{_e(o["premiere_vue"])}</td>'
+            f'<td class="date">{_e(o["premiere_vue"])}</td>{_age_html(o)}'
             f'{"".join(cellules)}</tr>')
     return f"""
 <section id="jobs">
   <h2>Jobs étudiants</h2>
   {entete(section, libelles)}
-  <p class="legende">Trajet en voiture : durée sans trafic → durée ajustée (× facteur de trafic). « estim. » : routage indisponible, vol d'oiseau × détour. « — » : commune non reconnue.</p>
+  <p class="legende">Âge : jours depuis la publication de l'annonce, au jour du run. Trajet en voiture : durée sans trafic → durée ajustée (× facteur de trafic). « estim. » : routage indisponible, vol d'oiseau × détour. « — » : commune non reconnue.</p>
   <div class="outils" data-cible="table-jobs">
     <input type="search" class="filtre-texte" placeholder="Filtrer (titre, employeur, lieu…)">
     <span>Trier par : <button type="button" class="tri actif" data-tri="meilleur">meilleur trajet</button></span>
   </div>
   <div class="defile"><table id="table-jobs">
-    <thead><tr><th>Offre</th><th>Employeur</th><th>Lieu</th><th>Liens</th><th>Vue le</th>{entetes}</tr></thead>
+    <thead><tr><th>Offre</th><th>Employeur</th><th>Lieu</th><th>Liens</th><th>Vue le</th><th><button type="button" class="tri" data-tri="age">Âge</button></th>{entetes}</tr></thead>
     <tbody>{"".join(lignes)}</tbody>
   </table></div>
 </section>"""

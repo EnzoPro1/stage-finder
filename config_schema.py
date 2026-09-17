@@ -53,6 +53,7 @@ class ConfigModel(BaseModel):
     SOURCES_ACTIVES_JOBS: list[str] = Field(min_length=1)
     SOURCES_ECARTEES_JOBS: dict[str, str]
     MOTS_CLES_ALTERNANCE: list[str] = Field(min_length=1)
+    JOURS_FRAICHEUR_JOBS: int = Field(gt=0, le=31)   # plafond de `publieeDepuis` chez France Travail
     FRANCE_TRAVAIL_PAGES_JOBS: int = Field(ge=1, le=21)   # l'API s'arrête à l'index 3149
     CAREERJET_PAGES_JOBS: int = Field(ge=1, le=20)
     CAREERJET_TAILLE_PAGE_JOBS: int = Field(ge=1, le=99)

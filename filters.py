@@ -101,15 +101,20 @@ def _parse_date(texte: str) -> date | None:
     return d.date() if d else None
 
 
-def est_recente(offre: Offre) -> bool:
-    """Vrai si l'offre a été publiée dans les config.JOURS_FRAICHEUR derniers jours."""
-    d = _parse_date(offre.posted_at)
-    if d is None:
+def age_jours(posted_at: str, reference: date | None = None) -> int | None:
+    """Âge d'une offre en jours à la date ``reference`` (aujourd'hui par défaut), ou None."""
+    d = _parse_date(posted_at)
+    return None if d is None else ((reference or date.today()) - d).days
+
+
+def est_recente(offre: Offre, jours: int | None = None) -> bool:
+    """Vrai si l'offre a été publiée dans les ``jours`` derniers jours (stages : config.JOURS_FRAICHEUR)."""
+    age = age_jours(offre.posted_at)
+    if age is None:
         # Date inconnue : comportement piloté par la config.
         return config.GARDER_SI_DATE_INCONNUE
-    age = (date.today() - d).days
     # age négatif possible (fuseaux/décalage) : on tolère un petit futur.
-    return -1 <= age <= config.JOURS_FRAICHEUR
+    return -1 <= age <= (config.JOURS_FRAICHEUR if jours is None else jours)
 
 
 def filtrer(offres: list[Offre]) -> list[Offre]:
@@ -165,6 +170,8 @@ def filtrer_jobs_etudiants(offres: list[Offre]) -> list[Offre]:
     exclusion alternance/sénior, ni Île-de-France — le tri géographique se
     fera sur le temps de trajet depuis les origines, jamais sur un département.
 
+    La fenêtre est `config.JOURS_FRAICHEUR_JOBS` (21 j), pas celle des stages.
+
     Une alternance n'est pas un job étudiant, mais elle n'est pas JETÉE : elle
     reçoit le drapeau « alternance » (mot de `config.MOTS_CLES_ALTERNANCE`
     dans le titre), et la revue manuelle tranche.
@@ -173,7 +180,7 @@ def filtrer_jobs_etudiants(offres: list[Offre]) -> list[Offre]:
     trop_vieilles = 0
     releve = observabilite.actif()
     for offre in offres:
-        if not est_recente(offre):
+        if not est_recente(offre, config.JOURS_FRAICHEUR_JOBS):
             trop_vieilles += 1
             if releve is not None:
                 releve.compter_rejet(offre.source, "trop-vieux")
@@ -186,7 +193,7 @@ def filtrer_jobs_etudiants(offres: list[Offre]) -> list[Offre]:
     logger.info(
         "Filtres jobs étudiants : %d gardée(s), %d trop vieille(s) (+%dj), "
         "%d signalée(s) alternance.",
-        len(gardees), trop_vieilles, config.JOURS_FRAICHEUR,
+        len(gardees), trop_vieilles, config.JOURS_FRAICHEUR_JOBS,
         sum("alternance" in o.drapeaux for o in gardees),
     )
     return gardees

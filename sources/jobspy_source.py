@@ -120,7 +120,8 @@ def _consoles_jobspy_au_niveau_erreur() -> None:
 
 
 def _scraper(site: str, requete: str, libelle: str, lieu: str | None = None,
-             rayon_km: int | None = None, resultats: int | None = None) -> list[dict]:
+             rayon_km: int | None = None, resultats: int | None = None,
+             jours: int | None = None) -> list[dict]:
     """Scrape UN site pour UNE requête. Retourne une liste de dicts (ou []).
 
     ``lieu`` vaut par défaut « Paris, France » (stages). ``rayon_km`` est
@@ -141,7 +142,7 @@ def _scraper(site: str, requete: str, libelle: str, lieu: str | None = None,
                 site, config.RESULTATS_PAR_TERME),
             country_indeed="France",
             # Fraîcheur poussée côté source : offres des N derniers jours.
-            hours_old=config.JOURS_FRAICHEUR * 24,
+            hours_old=(jours or config.JOURS_FRAICHEUR) * 24,
             # Récupère la description complète sur LinkedIn (sinon vide) :
             linkedin_fetch_description=(site == "linkedin"),
             verbose=2,
@@ -238,7 +239,8 @@ def recuperer_jobs_etudiants() -> list[dict]:
             premier_appel = False
             lot = _scraper(site, requete, f"jobs étudiants, {origine.libelle}",
                            lieu=f"{origine.commune}, France", rayon_km=jobs.rayon_km,
-                           resultats=config.JOBSPY_RESULTATS_PAR_SITE_JOBS.get(site))
+                           resultats=config.JOBSPY_RESULTATS_PAR_SITE_JOBS.get(site),
+                           jours=config.JOURS_FRAICHEUR_JOBS)
             toutes.extend(provenance.marquer_par_texte(lot, etiquettes, texte_brut))
 
     toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))

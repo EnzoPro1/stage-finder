@@ -146,6 +146,17 @@ def _obtenir_token(client_id: str, client_secret: str, scope: str | None = None)
 
 _MOTIF_MOT = re.compile(r"[^\W_]+", re.UNICODE)
 
+# Valeurs que `publieeDepuis` accepte, et AUCUNE autre. Le 2026-09-17, 21 a
+# pris un HTTP 400 sur les 19 appels du run (« 1, 3, 7, 14 ou 31 attendu ») :
+# la source est passée MUETTE. On demande la plus petite fenêtre qui couvre
+# celle voulue ; le filtre de fraîcheur du pipeline coupe au jour près.
+_FENETRES_PUBLIEE_DEPUIS = (1, 3, 7, 14, 31)
+
+
+def publiee_depuis(jours: int) -> int:
+    """21 -> 31, 7 -> 7, 10 -> 14 : la plus petite fenêtre acceptée qui couvre ``jours``."""
+    return next((f for f in _FENETRES_PUBLIEE_DEPUIS if f >= jours), _FENETRES_PUBLIEE_DEPUIS[-1])
+
 
 def mots_cles(terme: str) -> str:
     """Un terme de recherche.yaml réduit à ce que ``motsCles`` accepte.
@@ -163,7 +174,7 @@ def _chercher_un_terme(token: str, terme: str) -> list[dict]:
         "motsCles": mots_cles(terme),
         "region": _REGION_IDF,
         # Offres publiées depuis N jours (le paramètre attend un nb de jours, ≤ 31).
-        "publieeDepuis": min(config.JOURS_FRAICHEUR, 31),
+        "publieeDepuis": publiee_depuis(config.JOURS_FRAICHEUR),
         "range": f"0-{max(0, config.FRANCE_TRAVAIL_RESULTATS - 1)}",
     }
     return _chercher(token, params, terme)[0]
@@ -234,6 +245,10 @@ def _chercher(token: str, params: dict, terme: str) -> tuple[list[dict], int | N
 TYPE_CONTRAT_STAGE = "MIS"
 
 
+def _publiee(jours: int) -> int:
+    return publiee_depuis(jours)
+
+
 def compter_offres(
     mots_cles: str | None = None,
     publiee_depuis: int = 31,
@@ -260,7 +275,7 @@ def compter_offres(
         return None
 
     params: dict = {"region": _REGION_IDF,
-                    "publieeDepuis": min(publiee_depuis, 31), "range": "0-0"}
+                    "publieeDepuis": _publiee(publiee_depuis), "range": "0-0"}
     if mots_cles:
         params["motsCles"] = mots_cles
     if code_rome:
@@ -399,7 +414,7 @@ def recuperer_jobs_etudiants() -> list[dict]:
         return []
 
     jobs = recherche.charger().student_jobs
-    commun = {"distance": jobs.rayon_km, "publieeDepuis": min(config.JOURS_FRAICHEUR, 31)}
+    commun = {"distance": jobs.rayon_km, "publieeDepuis": publiee_depuis(config.JOURS_FRAICHEUR_JOBS)}
     origines = list(jobs.origines.values())
     paquets = [origines[i:i + _COMMUNES_PAR_APPEL]
                for i in range(0, len(origines), _COMMUNES_PAR_APPEL)]

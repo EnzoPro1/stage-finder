@@ -218,3 +218,26 @@ def test_un_run_anterieur_aux_colonnes_de_run_retombe_sur_la_date(tmp_path):
     section = rapport.charger_section("Stages", base)
     assert [o["title"] for o in section.offres] == ["Stage NLP"]
     assert section.offres[0]["nouvelle"] is False
+
+
+def test_l_age_de_chaque_offre_est_affiche_et_triable(tmp_path):
+    from datetime import date, timedelta
+
+    base = tmp_path / "jobs.db"
+    recente = _offre("Récente", [("careerjet", "contenu:1", "u1")], trajets={"ville_a": _trajet(10, 13)})
+    ancienne = _offre("Ancienne", [("careerjet", "contenu:2", "u2")], trajets={"ville_a": _trajet(9, 12)})
+    sans_date = _offre("Sans date", [("careerjet", "contenu:3", "u3")], trajets={"ville_a": _trajet(8, 11)})
+    recente.posted_at = (date.today() - timedelta(days=2)).isoformat()
+    ancienne.posted_at = (date.today() - timedelta(days=19)).isoformat()
+    sans_date.posted_at = ""
+    _run(base, [recente, ancienne, sans_date])
+
+    page = rapport.rendre(rapport.Section("Stages", None), rapport.charger_section("Jobs", base),
+                          {"ville_a": "Meaux"})
+    lignes = {re.search(r'class="titre">(?:<span class="neuf">nouveau</span> )?([^<]+)', l).group(1): l
+              for l in _lignes_du_tableau(page, "table-jobs")}
+    assert 'data-age="2"' in lignes["Récente"] and ">2 j</td>" in lignes["Récente"]
+    assert 'data-age="19"' in lignes["Ancienne"] and ">19 j</td>" in lignes["Ancienne"]
+    assert 'data-age=""' in lignes["Sans date"] and 'class="num age">—</td>' in lignes["Sans date"]
+    assert 'data-tri="age"' in page
+

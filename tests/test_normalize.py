@@ -162,3 +162,20 @@ def test_la_mention_de_genre_redevient_deduplicable():
 
     brut = normalize._texte("Data Scientist (Hu002FF)")
     assert dedup._normaliser_titre(brut) == dedup._normaliser_titre("Data Scientist (H/F)")
+
+
+def test_france_travail_decode_les_entites_html_du_titre_et_de_la_description():
+    """Titre réel du run du 2026-09-17, livré avec l'entité non décodée."""
+    brut = {
+        "id": "6942947",
+        "intitule": "&#128663; Vendeur(se) itinérant(e) - Pièces de rechange automobiles - Secteur 94 / 78 et 91 H/F",
+        "description": "Vous &amp; votre v&eacute;hicule : &lt; 2 ans d'exp&eacute;rience &gt; bienvenus.",
+        "lieuTravail": {"libelle": "91 - Morangis"},
+        "origineOffre": {"urlOrigine": "https://candidat.francetravail.fr/offres/recherche/detail/6942947"},
+        "dateCreation": "2026-09-16T10:00:00.000Z",
+    }
+    (offre,) = normaliser("france_travail", [brut])
+    assert offre.title.startswith("🚗 Vendeur(se) itinérant(e)")
+    assert "&#" not in offre.title
+    assert offre.description == "Vous & votre véhicule : < 2 ans d'expérience > bienvenus."
+

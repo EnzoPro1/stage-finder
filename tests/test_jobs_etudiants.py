@@ -227,7 +227,7 @@ def test_jobspy_jobs_par_origine(jobs, monkeypatch):
 
     assert [a[2] for a in appels] == ["Meaux, France", "Noisy-le-Grand, France"]
     assert {a[3] for a in appels} == {10}, "15 km -> 10 miles, arrondi au-dessus"
-    assert all(a[4] == config.JOURS_FRAICHEUR * 24 and a[5] is None for a in appels)
+    assert all(a[4] == config.JOURS_FRAICHEUR_JOBS * 24 and a[5] is None for a in appels)
     assert {a[6] for a in appels} == {config.JOBSPY_RESULTATS_PAR_SITE_JOBS["indeed"]}, \
         "plafond propre aux jobs, pas celui des stages"
     assert all(provenance.familles_de(o) == ["week_end"] for o in offres)
@@ -334,3 +334,39 @@ def test_pipeline_jobs_bout_en_bout_sans_modele(jobs, monkeypatch, tmp_path):
 
 def test_la_base_des_jobs_n_est_pas_celle_des_stages():
     assert str(config.CHEMIN_BASE_JOBS) != str(config.CHEMIN_BASE)
+
+
+# ---------------------------------------------------------------------------
+# Fraîcheur propre aux jobs étudiants
+# ---------------------------------------------------------------------------
+def test_la_fenetre_des_jobs_est_separee_de_celle_des_stages(monkeypatch):
+    from datetime import timedelta
+
+    monkeypatch.setattr(config, "JOURS_FRAICHEUR", 7)
+    monkeypatch.setattr(config, "JOURS_FRAICHEUR_JOBS", 21)
+    il_y_a = lambda j: (date.today() - timedelta(days=j)).isoformat()
+    offres = [_offre("Vendeur 10 j", posted=il_y_a(10)), _offre("Vendeur 21 j", posted=il_y_a(21)),
+              _offre("Vendeur 22 j", posted=il_y_a(22))]
+    assert [o.title for o in filters.filtrer_jobs_etudiants(offres)] == ["Vendeur 10 j", "Vendeur 21 j"]
+    assert not filters.est_recente(_offre("Stage", posted=il_y_a(10))), "les stages restent à 7 j"
+
+
+def test_france_travail_jobs_pousse_la_fenetre_des_jobs(ft, monkeypatch):
+    monkeypatch.setattr(config, "JOURS_FRAICHEUR_JOBS", 21)
+    demandes = []
+
+    def faux_get(url, params, headers, timeout):
+        demandes.append(params)
+        return _Reponse(status=204)
+
+    monkeypatch.setattr(ft.requests, "get", faux_get)
+    ft.recuperer_jobs_etudiants()
+    assert {d["publieeDepuis"] for d in demandes} == {31}, \
+        "21 j n'est pas une valeur acceptée : la fenêtre 31 la couvre, le filtre coupe à 21"
+
+
+@pytest.mark.parametrize("jours, attendu", [(1, 1), (2, 3), (7, 7), (10, 14), (21, 31), (31, 31)])
+def test_publiee_depuis_ne_prend_que_les_valeurs_acceptees(jours, attendu):
+    from sources import france_travail as ft
+
+    assert ft.publiee_depuis(jours) == attendu

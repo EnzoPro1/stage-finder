@@ -323,13 +323,27 @@ def normaliser_jobspy(raw: dict) -> Offre:
     )
 
 
+def _sans_entites(valeur) -> str:
+    """Décode les entités HTML (« &#128663; » -> « 🚗 », « &amp; » -> « & »), sans toucher au reste.
+
+    Pas `_sans_html` : France Travail livre du TEXTE, pas du HTML — une
+    description peut contenir « < 2 ans d'expérience > », qu'un retrait de
+    balises mangerait.
+    """
+    return html_module.unescape(_texte(valeur))
+
+
 def normaliser_france_travail(raw: dict) -> Offre:
-    """Convertit une offre brute de l'API France Travail."""
+    """Convertit une offre brute de l'API France Travail.
+
+    Titre et description arrivent avec des entités HTML non décodées
+    (« &#128663; Vendeur(se) itinérant(e) », run du 2026-09-17).
+    """
     return Offre(
-        title=_texte(raw.get("intitule")),
+        title=_sans_entites(raw.get("intitule")),
         company=_texte((raw.get("entreprise") or {}).get("nom")),
         location=_texte((raw.get("lieuTravail") or {}).get("libelle")),
-        description=_texte(raw.get("description")),
+        description=_sans_entites(raw.get("description")),
         # L'URL publique de l'offre est dans origineOffre.urlOrigine.
         url=_texte((raw.get("origineOffre") or {}).get("urlOrigine")),
         source="france_travail",
