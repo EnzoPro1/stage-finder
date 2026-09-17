@@ -84,3 +84,16 @@ def test_un_site_d_une_source_inconnue_est_rejete(monkeypatch):
     with pytest.raises(ValidationError):
         valider_config()
 
+
+def test_un_mot_adzuna_jobs_qui_n_est_pas_un_terme_est_rejete(monkeypatch):
+    monkeypatch.setattr(config, "ADZUNA_MOTS_JOBS", ["vendeur", "caisse"])
+    with pytest.raises(ValueError, match="caisse"):
+        valider_config()
+
+
+def test_les_mots_adzuna_jobs_du_depot_sont_des_termes():
+    import recherche
+
+    termes = {t.casefold() for t in recherche.lire(recherche.CHEMIN_RECHERCHE).student_jobs.termes}
+    assert all(m.casefold() in termes for m in config.ADZUNA_MOTS_JOBS)
+

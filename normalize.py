@@ -188,6 +188,16 @@ _CHAMP_IDENTIFIANT = {
 # elle peut être réécrite à une réindexation, ce qui créerait un second lien
 # pour la même annonce. Deux annonces identiques sur ces quatre champs sont un
 # doublon au sens de la dédup exacte de toute façon.
+#
+# CE QUE CETTE CLÉ CONFOND, mesuré sur un run réel de jobs étudiants
+# (2026-09-17) : 339 résultats bruts -> 308 liens. 21 liens (~7 %) portent
+# plus d'un résultat brut, dont 16 avec deux résultats dans une MÊME requête —
+# donc des annonces distinctes, publiées à l'identique par une même enseigne
+# dans une même commune (6 × « Employé polyvalent de restauration F/H »,
+# Areas, Tremblay-en-France, six horodatages). Les 21 ont des dates
+# différentes : ajouter la date les séparerait toutes, mais ferait d'une
+# réindexation un second lien. Décision : clé inchangée ; l'effet est une
+# ligne pour plusieurs postes identiques, pas une annonce perdue de vue.
 _CHAMPS_CONTENU = {
     "careerjet": ("title", "company", "locations", "site"),
 }

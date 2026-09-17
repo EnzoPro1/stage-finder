@@ -178,9 +178,9 @@ def recuperer_jobs_etudiants() -> list[dict]:
     - `where` = code postal : « Meaux » et « Évry-Courcouronnes »
       rendent 0 offre, leurs codes postaux en rendent (sondé le 2026-09-17) ;
     - `distance` = rayon de recherche.yaml ; sans lui, Adzuna prend 10 km ;
-    - `what_or` = les MOTS des termes, moins ADZUNA_MOTS_IGNORES_JOBS : Adzuna
-      ne sait pas faire de OU de phrases (« hôte de caisse » -> « hôte »,
-      « caisse ») ;
+    - `what_or` = ADZUNA_MOTS_JOBS, les seuls termes d'un mot sans ambiguïté :
+      Adzuna ne sait pas faire de OU de phrases, et les mots isolés des autres
+      termes (« partiel », « caisse », « extra ») ramenaient n'importe quoi ;
     - pas de `part_time` : le filtre structuré n'est tenu pour fiable que chez
       France Travail.
 
@@ -197,7 +197,7 @@ def recuperer_jobs_etudiants() -> list[dict]:
 
     jobs = recherche.charger().student_jobs
     etiquettes = list(jobs.familles())
-    mots = recherche.mots_isoles(jobs.termes, config.ADZUNA_MOTS_IGNORES_JOBS)
+    mots = config.ADZUNA_MOTS_JOBS
     taille = config.ADZUNA_RESULTATS_PAR_PAGE_JOBS
     toutes: list[dict] = []
     for origine in jobs.origines.values():

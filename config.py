@@ -299,18 +299,28 @@ MOTS_CLES_ALTERNANCE = [
 # Au-delà, un conseil « tronquée » est imprimé en tête du bilan.
 FRANCE_TRAVAIL_PAGES_JOBS = 4
 
-# Adzuna : une requête par origine, `what_or` des mots des termes.
+# Adzuna : une requête par origine, `what_or` d'une liste FERMÉE de mots.
 ADZUNA_PAGES_JOBS = 3
 ADZUNA_RESULTATS_PAR_PAGE_JOBS = 50    # plafond de l'API
-# Mots trop génériques pour être interrogés seuls. Adzuna ne sait pas faire de
-# phrase : « temps partiel » arrive en « temps » OU « partiel », « cours
-# particuliers » en « cours » OU « particuliers ». On garde le mot qui porte
-# le sens (« partiel », « scolaire »…) et on retire celui qui ramènerait tout.
-# Les étiquettes, elles, sont posées sur la PHRASE retrouvée dans le texte.
-ADZUNA_MOTS_IGNORES_JOBS = [
-    "de", "job", "temps", "mi", "week", "end", "cours", "particuliers",
-    "commandes", "soutien",
-]
+# Adzuna ne sait pas faire de phrase. La première version découpait les seize
+# termes en mots et retirait les plus génériques : il restait « partiel »,
+# « caisse », « extra », « scolaire »… qui matchent n'importe quelle
+# description. Run réel du 2026-09-17 : 6 135 offres annoncées autour de
+# Noisy-le-Grand, et 270 des 335 gardées sans aucun terme (« Commercial
+# Immobilier »). On n'interroge donc plus que les termes d'UN mot qui ne
+# peuvent désigner qu'un job étudiant. Chaque mot doit être, tel quel, un
+# terme de recherche.yaml (vérifié par `valider_config`) : l'étiquette posée
+# par le texte correspond ainsi exactement à ce qui a été demandé.
+#
+# ÇA NE SUFFIT PAS — mesuré juste après, le 2026-09-17 : 348 bruts, 331 après
+# dédup, 295 sans terme retrouvé (89 %, contre 81 % avant). Noisy-le-Grand
+# annonce encore 3 856 offres. Cause, sondée : Adzuna ÉLARGIT les mots par
+# synonymie, même en `title_only` — `title_only=étudiant` rend « Apprenti
+# élagueur », « Apprenti auxiliaire de vie » ; `title_only=vendeur` rend 697
+# « Conseiller commercial ». Ses descriptions sont tronquées à 500 caractères
+# et ne contiennent pas le mot. Seul `title_only=serveur` est resté net (6).
+# Aucune formulation de requête ne contrôle cet élargissement.
+ADZUNA_MOTS_JOBS = ["vendeur", "serveur", "équipier", "animateur", "étudiant", "saisonnier"]
 
 # Careerjet : une requête OU par origine.
 CAREERJET_PAGES_JOBS = 3

@@ -55,7 +55,7 @@ class ConfigModel(BaseModel):
     FRANCE_TRAVAIL_PAGES_JOBS: int = Field(ge=1, le=21)   # l'API s'arrête à l'index 3149
     ADZUNA_PAGES_JOBS: int = Field(ge=1, le=20)
     ADZUNA_RESULTATS_PAR_PAGE_JOBS: int = Field(ge=1, le=50)
-    ADZUNA_MOTS_IGNORES_JOBS: list[str]
+    ADZUNA_MOTS_JOBS: list[str] = Field(min_length=1)
     CAREERJET_PAGES_JOBS: int = Field(ge=1, le=20)
     CAREERJET_TAILLE_PAGE_JOBS: int = Field(ge=1, le=99)
     JOBSPY_SITES_JOBS: list[str] = Field(min_length=1)
@@ -226,7 +226,15 @@ def valider_config() -> ConfigModel:
         if hasattr(config, nom)
     }
     modele = ConfigModel(**champs)
-    recherche.lire(recherche.CHEMIN_RECHERCHE)
+    lue = recherche.lire(recherche.CHEMIN_RECHERCHE)
+    if lue.student_jobs:
+        termes = {t.casefold() for t in lue.student_jobs.termes}
+        etrangers = [m for m in modele.ADZUNA_MOTS_JOBS if m.casefold() not in termes]
+        if etrangers:
+            raise ValueError(
+                "ADZUNA_MOTS_JOBS contient des mots qui ne sont pas des termes de "
+                "student_jobs dans recherche.yaml : " + ", ".join(etrangers)
+            )
     return modele
 
 

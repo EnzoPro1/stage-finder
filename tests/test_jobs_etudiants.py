@@ -228,8 +228,8 @@ def test_adzuna_jobs_code_postal_rayon_et_troncature(jobs, monkeypatch):
     offres = adzuna.recuperer_jobs_etudiants()
 
     assert [(d["where"], d["distance"]) for d in demandes] == [("77100", 15), ("93160", 15)]
-    assert all(d["what_or"] == "vendeur hôte caisse" for d in demandes), \
-        "« de », « week », « end » retirés"
+    assert all(d["what_or"] == " ".join(config.ADZUNA_MOTS_JOBS) for d in demandes), \
+        "liste fermée de mots, pas les mots des termes"
     assert all("part_time" not in d and "title_only" not in d for d in demandes)
     assert provenance.familles_de(offres[0]) == ["hote_de_caisse", "week_end"]
     assert "TRONQUÉE" in r.conseils["adzuna"]
