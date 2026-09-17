@@ -14,6 +14,7 @@ Utilisation :
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -59,6 +60,9 @@ class ConfigModel(BaseModel):
     CAREERJET_PAGES_JOBS: int = Field(ge=1, le=20)
     CAREERJET_TAILLE_PAGE_JOBS: int = Field(ge=1, le=99)
     JOBSPY_SITES_JOBS: list[str] = Field(min_length=1)
+    ORS_ROUTES_MAX_PAR_APPEL: int = Field(ge=1, le=3500)
+    ORS_APPELS_MAX_PAR_RUN: int = Field(ge=1, le=50)
+    CHEMIN_CACHE_TRAJETS: Path
     JOBSPY_RESULTATS_PAR_SITE: dict[str, int] = Field(min_length=1)
 
     # --- Tableau de bord marché ---

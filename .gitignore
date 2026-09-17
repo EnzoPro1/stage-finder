@@ -22,6 +22,8 @@ stages.db
 jobs_etudiants.db
 jobs_etudiants.db-wal
 jobs_etudiants.db-shm
+# Cache des temps de trajet (`config.CHEMIN_CACHE_TRAJETS`).
+trajets.json
 # Journal WAL et mémoire partagée : `storage.ouvrir` pose `journal_mode=WAL`,
 # qui fait apparaître ces deux fichiers À CÔTÉ de la base. Ils contiennent des
 # pages de `stages.db` — donc des offres scrapées — et `stages.db` seul ne les

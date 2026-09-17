@@ -330,7 +330,7 @@ def test_pipeline_jobs_bout_en_bout_sans_modele(jobs, monkeypatch, tmp_path):
     import storage
 
     brut = [
-        {"title": "Alternance vendeur", "company": "A", "locations": "Lagny", "site": "s",
+        {"title": "Alternance vendeur", "company": "A", "locations": "Lagny-sur-Marne", "site": "s",
          "description": "", "url": "u1", "date": _aujourd_hui()},
         {"title": "Vendeur week-end", "company": "B", "locations": "Meaux", "site": "s",
          "description": "", "url": "u2", "date": _aujourd_hui()},
@@ -341,8 +341,15 @@ def test_pipeline_jobs_bout_en_bout_sans_modele(jobs, monkeypatch, tmp_path):
     monkeypatch.setattr(jobs_etudiants.ranker, "encoder_offres",
                         lambda offres: np.eye(len(offres)))
 
+    import trajets
+
+    class _SansRoutage(trajets.Calculateur):
+        def _router(self, manquantes):
+            return "routage désactivé (test)"
+
+    calc = _SansRoutage(jobs, None, tmp_path / "trajets.json")
     base = tmp_path / "jobs.db"
-    offres = jobs_etudiants.executer(utiliser_jobspy=False, chemin_base=base)
+    offres = jobs_etudiants.executer(utiliser_jobspy=False, chemin_base=base, calculateur=calc)
     assert len(offres) == 2 and all(o.nouvelle for o in offres)
 
     conn = storage.ouvrir(str(base))

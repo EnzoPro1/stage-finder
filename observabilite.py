@@ -235,6 +235,20 @@ class Releve:
             self.familles[nom] = LigneFamille(nom)
         return self.familles[nom]
 
+    def retirer_survivante(self, source: str, motif: str, familles: list[str] = ()) -> None:
+        """Une offre qui avait passé les filtres, rejetée par une étape ULTÉRIEURE.
+
+        Le filtre de trajet tourne après les filtres de fraîcheur : sans cette
+        correction, « gardées » annoncerait des offres rejetées pour distance.
+        """
+        with self._verrou:
+            ligne = self._ligne(source)
+            ligne.survivantes = max(0, ligne.survivantes - 1)
+            ligne.rejets[motif] = ligne.rejets.get(motif, 0) + 1
+            for famille in familles:
+                f = self._famille(famille)
+                f.survivantes = max(0, f.survivantes - 1)
+
     def compter_fusion(self, source: str) -> None:
         """Une offre supprimee par la deduplication (exacte ou floue)."""
         with self._verrou:

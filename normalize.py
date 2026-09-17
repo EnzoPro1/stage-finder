@@ -83,6 +83,11 @@ class Offre:
     # Signalements qui n'excluent PAS l'offre (jobs étudiants : « alternance »).
     drapeaux: list[str] = field(default_factory=list)
 
+    # Jobs étudiants (trajets.py) : code de la commune résolue ("" si inconnue)
+    # et, par origine, {brut_min, ajuste_min, distance_km, estimation}.
+    commune_trajet: str = ""
+    trajets: dict = field(default_factory=dict)
+
     # Toutes les annonces fusionnées dans cette offre, une par (source, clé).
     # `url` et `source` ci-dessus restent ceux de la version la plus riche.
     liens: list[Lien] = field(default_factory=list)

@@ -2,7 +2,8 @@
 jobs_etudiants.py — Collecte des jobs étudiants autour des origines.
 
     Sources (autour de chaque origine) -> Normalisation -> Fraîcheur (+ drapeau
-    alternance) -> Déduplication (exacte + floue) -> Persistance (base séparée)
+    alternance) -> Trajet (< seuil depuis une origine) -> Déduplication
+    (exacte + floue) -> Persistance (base séparée)
 
 Ce qui DIFFÈRE des stages, et pourquoi :
 
@@ -35,15 +36,22 @@ import main
 import observabilite
 import ranker
 import storage
+import trajets
 from normalize import Offre
 
 logger = logging.getLogger(__name__)
 
 
-def collecter_et_dedupliquer(utiliser_jobspy: bool = True) -> list[Offre]:
-    """Collecte, filtre et déduplique. Le bilan du run est journalisé au passage."""
+def collecter_et_dedupliquer(utiliser_jobspy: bool = True,
+                             calculateur: trajets.Calculateur | None = None) -> list[Offre]:
+    """Collecte, filtre (fraîcheur, trajet) et déduplique. Le bilan est journalisé au passage.
+
+    Le trajet est calculé AVANT la déduplication : une fusion garde la version
+    la plus riche, et celle-ci doit déjà porter sa commune et ses trajets.
+    """
     offres = main.collecter(utiliser_jobspy, perimetre=main.perimetre_jobs())
     offres = filters.filtrer_jobs_etudiants(offres)
+    offres = trajets.filtrer(offres, calculateur or trajets.Calculateur.depuis_config())
     observabilite.journaliser()
     offres = dedup.dedupliquer(offres)
     if offres and config.DEDUP_FLOUE_ACTIVE:
@@ -64,14 +72,21 @@ def afficher_cli(offres: list[Offre]) -> None:
               f"{', '.join(sorted({l.source for l in offre.liens})) or offre.source}")
         if offre.familles:
             print(f"       termes : {', '.join(offre.familles)}")
+        if offre.trajets:
+            print("       trajet : " + "  ".join(
+                f"{o} {t['brut_min']:.0f}→{t['ajuste_min']:.0f} min"
+                f"{' (estim.)' if t['estimation'] else ''}" for o, t in offre.trajets.items()))
+        else:
+            print("       trajet : inconnu (commune non reconnue)")
         for lien in offre.liens or []:
             print(f"       {lien.url}")
         print()
 
 
-def executer(utiliser_jobspy: bool = True, chemin_base=config.CHEMIN_BASE_JOBS) -> list[Offre]:
+def executer(utiliser_jobspy: bool = True, chemin_base=config.CHEMIN_BASE_JOBS,
+             calculateur: trajets.Calculateur | None = None) -> list[Offre]:
     """Run complet des jobs étudiants. ``chemin_base=None`` : rien n'est persisté."""
-    offres = collecter_et_dedupliquer(utiliser_jobspy)
+    offres = collecter_et_dedupliquer(utiliser_jobspy, calculateur)
     tableau = observabilite.rendre_tableau()
     if tableau:
         print(f"\n{'=' * 78}\n BILAN PAR SOURCE — JOBS ÉTUDIANTS\n{'=' * 78}\n{tableau}\n")

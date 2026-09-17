@@ -329,6 +329,19 @@ CAREERJET_TAILLE_PAGE_JOBS = 50
 # JobSpy : sites interrogés pour les jobs étudiants, autour de chaque origine.
 JOBSPY_SITES_JOBS = ["indeed"]
 
+# --- Trajets (trajets.py) ----------------------------------------------------
+# OpenRouteService, clé ORS_API_KEY dans le .env. Seuil et facteurs : bloc
+# `student_jobs.trajet` de recherche.yaml.
+#
+# Quota vérifié le 2026-09-17 : 3 500 routes par requête matrix (refus 400
+# code 6004 au-delà), 50 requêtes par jour (`X-Ratelimit-Limit: 50`, reset
+# 24 h après le premier appel ; une requête refusée compte).
+ORS_ROUTES_MAX_PAR_APPEL = 3500
+# Plafond d'appels par run : un run ne doit pas pouvoir épuiser la journée.
+ORS_APPELS_MAX_PAR_RUN = 10
+# Cache (origine, commune) -> durée et distance calculées. Artefact de run.
+CHEMIN_CACHE_TRAJETS = Path("trajets.json")
+
 # ---------------------------------------------------------------------------
 # 2 quater) Métiers suivis par le tableau de bord marché (market.py)
 # ---------------------------------------------------------------------------

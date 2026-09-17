@@ -113,6 +113,19 @@ class Origine(BaseModel):
     commune: str = Field(min_length=1)
     insee: str = Field(pattern=r"^(\d{5}|2[AB]\d{3})$")
     code_postal: str = Field(pattern=r"^\d{5}$")
+    # [lon, lat] exacts du point de départ ; à défaut, le centre de la commune.
+    coordonnees: list[float] | None = Field(default=None, min_length=2, max_length=2)
+
+
+class ReglageTrajet(BaseModel):
+    """Seuil et facteurs du filtre de trajet en voiture."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seuil_minutes: float = Field(default=45, gt=0, le=240)
+    facteur_trafic: float = Field(default=1.3, ge=1, le=5)
+    facteur_detour: float = Field(default=1.3, ge=1, le=5)
+    vitesse_estimation_kmh: float = Field(default=50, gt=0, le=130)
 
 
 # Étiquette de l'unique requête SANS mot-clé (France Travail, temps partiel
@@ -133,6 +146,7 @@ class JobsEtudiants(BaseModel):
     rayon_km: int = Field(gt=0, le=100)
     origines: dict[str, Origine] = Field(min_length=1)
     termes: list[str] = Field(min_length=1)
+    trajet: ReglageTrajet = Field(default_factory=ReglageTrajet)
 
     @field_validator("origines")
     @classmethod

@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS offres (
     familles     TEXT,   -- familles de requêtes, séparées par des espaces
     familles_titre TEXT, -- parmi elles, celles dont un terme est dans le titre
     drapeaux     TEXT,   -- signalements non excluants (« alternance »)
+    commune_trajet TEXT, -- jobs étudiants : code de la commune résolue
+    trajets      TEXT,   -- jobs étudiants : JSON {origine: {brut_min, ajuste_min, …}}
     dernier_score REAL,
     premiere_vue TEXT,   -- date ISO du premier run où l'offre est apparue
     derniere_vue TEXT,   -- date ISO du dernier run
@@ -148,7 +150,8 @@ def ouvrir(chemin: str | None = None) -> sqlite3.Connection:
 
 # Colonnes ajoutées à `offres` après sa création. `CREATE TABLE IF NOT EXISTS`
 # ne touche pas une table existante : une base d'avant CP3 doit les recevoir.
-_COLONNES_AJOUTEES = (("familles", "TEXT"), ("familles_titre", "TEXT"), ("drapeaux", "TEXT"))
+_COLONNES_AJOUTEES = (("familles", "TEXT"), ("familles_titre", "TEXT"), ("drapeaux", "TEXT"),
+                      ("commune_trajet", "TEXT"), ("trajets", "TEXT"))
 
 
 def _ajouter_colonnes_manquantes(conn: sqlite3.Connection) -> None:
@@ -248,6 +251,7 @@ def enregistrer_run(
 
         familles = " ".join(offre.familles)
         familles_titre = " ".join(offre.familles_titre)
+        trajets = json.dumps(offre.trajets, ensure_ascii=False) if offre.trajets else ""
         # Insertion selon la LIGNE, pas selon la nouveauté : une annonce dont le
         # titre a changé n'est pas nouvelle (ses liens sont connus) mais n'a pas
         # encore de ligne sous sa nouvelle clé.
@@ -256,13 +260,13 @@ def enregistrer_run(
                 """INSERT INTO offres
                    (cle, title, company, location, url, source, posted_at, salary,
                     duree_mois, date_debut, tags, familles, familles_titre, drapeaux,
-                    dernier_score, premiere_vue, derniere_vue, nb_vues)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+                    commune_trajet, trajets, dernier_score, premiere_vue, derniere_vue, nb_vues)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
                 (
                     cle, offre.title, offre.company, offre.location, offre.url,
                     offre.source, offre.posted_at, offre.salary, offre.duree_mois,
                     offre.date_debut, " ".join(offre.tags), familles, familles_titre,
-                    " ".join(offre.drapeaux),
+                    " ".join(offre.drapeaux), offre.commune_trajet, trajets,
                     round(float(score), 4), offre.premiere_vue, aujourd_hui,
                 ),
             )
@@ -273,7 +277,8 @@ def enregistrer_run(
                 """UPDATE offres
                    SET title=?, company=?, location=?, url=?, source=?, posted_at=?,
                        salary=?, duree_mois=?, date_debut=?, tags=?, familles=?,
-                       familles_titre=?, drapeaux=?, dernier_score=?,
+                       familles_titre=?, drapeaux=?, commune_trajet=?, trajets=?,
+                       dernier_score=?,
                        derniere_vue=?,
                        nb_vues = nb_vues + (CASE WHEN derniere_vue <> ? THEN 1 ELSE 0 END)
                    WHERE cle=?""",
@@ -281,7 +286,8 @@ def enregistrer_run(
                     offre.title, offre.company, offre.location, offre.url,
                     offre.source, offre.posted_at, offre.salary, offre.duree_mois,
                     offre.date_debut, " ".join(offre.tags), familles, familles_titre,
-                    " ".join(offre.drapeaux), round(float(score), 4), aujourd_hui, aujourd_hui, cle,
+                    " ".join(offre.drapeaux), offre.commune_trajet, trajets,
+                    round(float(score), 4), aujourd_hui, aujourd_hui, cle,
                 ),
             )
 
