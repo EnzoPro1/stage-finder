@@ -1,6 +1,6 @@
 """
 sources/jobspy_source.py — Source d'offres via la bibliothèque python-jobspy
-(Indeed FR, LinkedIn, Google Jobs). Aucune clé API requise.
+(Indeed FR, LinkedIn). Aucune clé API requise.
 
 Garde-fous demandés (scraping responsable) :
 - JAMAIS authentifié : JobSpy est utilisé sans identifiants (comportement par
@@ -11,6 +11,18 @@ Garde-fous demandés (scraping responsable) :
   try/except. Si un site bloque (429, captcha, timeout...), on loggue et on
   passe au suivant, sans jamais faire tomber le reste du pipeline.
 
+## Un blocage que JobSpy ne lève pas
+
+JobSpy n'émet PAS d'exception quand un site refuse : LinkedIn journalise
+« 429 Response - Blocked by LinkedIn » en ERROR et rend ce qu'il a déjà, Indeed
+journalise « responded with status code » en INFO. Ces messages partent sur
+les journaux propres de JobSpy (`JobSpy:LinkedIn`, `JobSpy:Indeed`), qui ne
+remontent pas aux nôtres. Un blocage ressemblait donc à un résultat maigre.
+``_Temoin`` les écoute pendant chaque requête et en fait des incidents de la
+ligne du site dans `observabilite`.
+
+Google Jobs n'est plus interrogé (cf. `config.SOURCES_ECARTEES_STAGES`).
+
 Renvoie des dicts BRUTS (une ligne du DataFrame JobSpy = un dict).
 La conversion vers le schéma commun est faite dans normalize.py.
 
@@ -20,6 +32,7 @@ Testable isolément :  python -m sources.jobspy_source
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 import pandas as pd
@@ -43,23 +56,58 @@ logger = logging.getLogger(__name__)
 
 NOM_SOURCE = "jobspy"
 
-# Sites interrogés. LinkedIn bloque agressivement : on le garde mais son échec
-# éventuel est sans conséquence grâce à l'isolation par appel.
-SITES = ["indeed", "google", "linkedin"]
-
 # Localisation passée à JobSpy (Indeed exige un pays explicite via country_indeed).
 _LOCALISATION = f"{config.LIEU}, France"
 
+# Journal de chaque scraper, tel que JobSpy le nomme (`create_logger("LinkedIn")`).
+_JOURNAUX = {"indeed": "JobSpy:Indeed", "linkedin": "JobSpy:LinkedIn", "google": "JobSpy:Google"}
 
-def _scraper(site: str, terme: str) -> list[dict]:
-    """Scrape UN site pour UN terme. Retourne une liste de dicts (ou [])."""
-    # Google Jobs fonctionne mieux avec une requête en langage naturel.
-    google_terme = f"{terme} {config.LIEU}" if site == "google" else None
+_MOTIF_CODE_HTTP = re.compile(r"\b[1-5]\d\d\b")
+
+
+def ligne(site: str) -> str:
+    """Nom de la ligne du bilan pour un site : celui que `normalize` donne à ses offres."""
+    return f"{NOM_SOURCE}:{site}"
+
+
+class _Temoin(logging.Handler):
+    """Recueille ce que JobSpy dit d'un refus sans le lever."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.INFO)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        if record.levelno >= logging.ERROR or "status code" in message.lower():
+            if message not in self.messages:
+                self.messages.append(message)
+
+
+def _consoles_jobspy_au_niveau_erreur() -> None:
+    """JobSpy écrit sur la console par ses propres handlers.
+
+    On l'appelle en ``verbose=2`` pour que ``_Temoin`` reçoive les messages
+    INFO d'Indeed ; ses consoles restent, elles, au niveau ERROR — ce que
+    ``verbose=0`` affichait jusqu'ici. Le bruit à l'écran ne change pas.
+    """
+    for nom, journal in list(logging.root.manager.loggerDict.items()):
+        if nom.startswith("JobSpy:") and isinstance(journal, logging.Logger):
+            for handler in journal.handlers:
+                if not isinstance(handler, _Temoin):
+                    handler.setLevel(logging.ERROR)
+
+
+def _scraper(site: str, requete: str, libelle: str) -> list[dict]:
+    """Scrape UN site pour UNE requête. Retourne une liste de dicts (ou [])."""
+    journal = logging.getLogger(_JOURNAUX.get(site, f"JobSpy:{site}"))
+    temoin = _Temoin()
+    journal.addHandler(temoin)
+    _consoles_jobspy_au_niveau_erreur()
     try:
         df = scrape_jobs(
             site_name=[site],
-            search_term=terme,
-            google_search_term=google_terme,
+            search_term=requete,
             location=_LOCALISATION,
             results_wanted=config.JOBSPY_RESULTATS_PAR_SITE.get(
                 site, config.RESULTATS_PAR_TERME),
@@ -68,22 +116,30 @@ def _scraper(site: str, terme: str) -> list[dict]:
             hours_old=config.JOURS_FRAICHEUR * 24,
             # Récupère la description complète sur LinkedIn (sinon vide) :
             linkedin_fetch_description=(site == "linkedin"),
-            verbose=0,
+            verbose=2,
         )
     except Exception as err:  # noqa: BLE001 - blocage, captcha, rate-limit, réseau...
         categorie, detail = observabilite.categorie_requests(err)
-        observabilite.signaler(NOM_SOURCE, categorie, f"{site} : {detail} sur « {terme} »")
-        logger.warning("JobSpy[%s] : échec pour « %s » (%s)", site, terme, err)
+        observabilite.signaler(ligne(site), categorie, f"{detail} sur « {libelle} »")
+        logger.warning("JobSpy[%s] : échec pour « %s » (%s)", site, libelle, err)
         return []
+    finally:
+        journal.removeHandler(temoin)
+
+    for message in temoin.messages:
+        categorie = ("http" if _MOTIF_CODE_HTTP.search(message) or "blocked" in message.lower()
+                     else "reseau")
+        observabilite.signaler(ligne(site), categorie, f"{message[:120]} sur « {libelle} »")
+        logger.warning("JobSpy[%s] : %s (« %s »)", site, message, libelle)
 
     if df is None or df.empty:
-        logger.info("JobSpy[%s] : 0 offre pour « %s »", site, terme)
+        logger.info("JobSpy[%s] : 0 offre pour « %s »", site, libelle)
         return []
 
     # Remplace les NaN pandas par None pour une normalisation propre.
     df = df.where(pd.notna(df), None)
     lignes = df.to_dict("records")
-    logger.info("JobSpy[%s] : %d offre(s) pour « %s »", site, len(lignes), terme)
+    logger.info("JobSpy[%s] : %d offre(s) pour « %s »", site, len(lignes), libelle)
     return lignes
 
 
@@ -96,21 +152,22 @@ def recuperer_offres() -> list[dict]:
     fois (identifiant JobSpy, préfixé par le site : « in-… », « li-… »).
     """
     if scrape_jobs is None:
-        observabilite.signaler(NOM_SOURCE, "import", str(_ERREUR_IMPORT))
+        for site in config.JOBSPY_SITES:
+            observabilite.signaler(ligne(site), "import", str(_ERREUR_IMPORT))
         logger.warning("JobSpy indisponible (import impossible : %s).", _ERREUR_IMPORT)
         return []
 
     familles = recherche.charger().familles
     toutes: list[dict] = []
     premier_appel = True
-    for site in SITES:
+    for site in config.JOBSPY_SITES:
         for nom, famille in familles.items():
             # Pause polie entre deux requêtes (sauf tout premier appel).
             if not premier_appel:
                 time.sleep(config.DELAI_ENTRE_REQUETES)
             premier_appel = False
             requete = recherche.requete_stage(famille.termes(), config.MOTS_CLES_STAGE)
-            toutes.extend(provenance.marquer(_scraper(site, requete), [nom]))
+            toutes.extend(provenance.marquer(_scraper(site, requete, nom), [nom]))
 
     toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("JobSpy : %d offre(s) brute(s) au total.", len(toutes))

@@ -276,6 +276,17 @@ def normaliser_jooble(raw: dict) -> Offre:
     )
 
 
+def source_affichee(nom_source: str, brut: dict) -> str:
+    """Nom que portera l'offre, et donc sa ligne du bilan : « jobspy:indeed » pour JobSpy.
+
+    Calculable sur l'item BRUT, pour que le brut et le normalisé d'un même site
+    tombent sur la même ligne.
+    """
+    if nom_source == "jobspy":
+        return f"jobspy:{_texte(brut.get('site')) or 'inconnu'}"
+    return nom_source
+
+
 def normaliser_jobspy(raw: dict) -> Offre:
     """Convertit une ligne JobSpy (dict issu d'un DataFrame)."""
     salaire = _salaire_depuis_bornes(
@@ -288,7 +299,7 @@ def normaliser_jobspy(raw: dict) -> Offre:
         description=_texte(raw.get("description")),
         url=_texte(raw.get("job_url")),
         # "site" = indeed / linkedin / google : on préfixe pour la traçabilité.
-        source=f"jobspy:{_texte(raw.get('site')) or 'inconnu'}",
+        source=source_affichee("jobspy", raw),
         posted_at=_texte(raw.get("date_posted")),
         salary=salaire,
     )

@@ -67,3 +67,20 @@ def test_source_ecartee_sans_raison_rejetee(monkeypatch):
     monkeypatch.setattr(config, "SOURCES_ECARTEES_STAGES", {"jooble": "  "})
     with pytest.raises(ValidationError):
         valider_config()
+
+
+def test_un_site_jobspy_ecarte_est_accepte():
+    valider_config()  # « jobspy:google » figure dans la config du dépôt
+
+
+def test_un_site_jobspy_a_la_fois_interroge_et_ecarte_est_rejete(monkeypatch):
+    monkeypatch.setattr(config, "SOURCES_ECARTEES_STAGES", {"jobspy:indeed": "raison"})
+    with pytest.raises(ValidationError):
+        valider_config()
+
+
+def test_un_site_d_une_source_inconnue_est_rejete(monkeypatch):
+    monkeypatch.setattr(config, "SOURCES_ECARTEES_STAGES", {"monster:fr": "raison"})
+    with pytest.raises(ValidationError):
+        valider_config()
+

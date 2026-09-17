@@ -7,6 +7,8 @@ fois CE QUI est demandé à chaque moteur et CE QUI est étiqueté au retour.
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 import pytest
 
@@ -213,7 +215,7 @@ def test_mots_cles_france_travail_retire_la_ponctuation():
 def test_jobspy_une_requete_par_site_et_famille(petite_recherche, monkeypatch):
     from sources import jobspy_source as js
 
-    monkeypatch.setattr(js, "SITES", ["indeed", "linkedin"])
+    monkeypatch.setattr(config, "JOBSPY_SITES", ["indeed", "linkedin"])
     monkeypatch.setattr(js.time, "sleep", lambda s: None)
     monkeypatch.setattr(config, "JOBSPY_RESULTATS_PAR_SITE", {"indeed": 100})
     appels = []
@@ -233,3 +235,65 @@ def test_jobspy_une_requete_par_site_et_famille(petite_recherche, monkeypatch):
     assert {a[2] for a in appels if a[0] == "linkedin"} == {config.RESULTATS_PAR_TERME}
     par_id = {o["id"]: provenance.familles_de(o) for o in offres}
     assert par_id == {"indeed-1": ["ml", "mlops"], "linkedin-1": ["ml", "mlops"]}
+
+
+# ---------------------------------------------------------------------------
+# JobSpy : un blocage journalisé mais non levé devient un incident
+# ---------------------------------------------------------------------------
+def _faux_scrape_qui_journalise(journal, niveau, message, lignes):
+    def faux(site_name, **_):
+        logging.getLogger(journal).log(niveau, message)
+        return pd.DataFrame(lignes)
+    return faux
+
+
+def test_jobspy_un_429_linkedin_journalise_devient_un_incident(petite_recherche, monkeypatch):
+    import observabilite
+    from sources import jobspy_source as js
+
+    monkeypatch.setattr(js.time, "sleep", lambda s: None)
+    monkeypatch.setattr(js, "scrape_jobs", _faux_scrape_qui_journalise(
+        "JobSpy:LinkedIn", logging.ERROR,
+        "429 Response - Blocked by LinkedIn for too many requests",
+        [{"id": "li-1", "title": "Stage NLP", "job_url": "u", "site": "linkedin"}]))
+    r = observabilite.demarrer(["jobspy:linkedin"])
+    js._scraper("linkedin", "(stage) (NLP)", "ml")
+
+    (incident,) = r.lignes["jobspy:linkedin"].incidents
+    assert incident.categorie == "http" and "Blocked by LinkedIn" in incident.detail
+    assert "« ml »" in incident.detail
+
+
+def test_jobspy_un_statut_indeed_en_info_devient_un_incident(petite_recherche, monkeypatch):
+    import observabilite
+    from sources import jobspy_source as js
+
+    monkeypatch.setattr(js, "scrape_jobs", _faux_scrape_qui_journalise(
+        "JobSpy:Indeed", logging.INFO,
+        "responded with status code: 403 (submit GitHub issue if this appears to be a bug)", []))
+    r = observabilite.demarrer(["jobspy:indeed"])
+    assert js._scraper("indeed", "(stage) (NLP)", "ml") == []
+    (incident,) = r.lignes["jobspy:indeed"].incidents
+    assert incident.categorie == "http"
+
+
+def test_jobspy_un_message_ordinaire_n_est_pas_un_incident(petite_recherche, monkeypatch):
+    import observabilite
+    from sources import jobspy_source as js
+
+    monkeypatch.setattr(js, "scrape_jobs", _faux_scrape_qui_journalise(
+        "JobSpy:Indeed", logging.INFO, "search page: 1 / 2",
+        [{"id": "in-1", "title": "Stage NLP", "job_url": "u", "site": "indeed"}]))
+    r = observabilite.demarrer(["jobspy:indeed"])
+    js._scraper("indeed", "(stage) (NLP)", "ml")
+    assert r.lignes["jobspy:indeed"].incidents == []
+
+
+def test_jobspy_le_temoin_est_retire_apres_la_requete(petite_recherche, monkeypatch):
+    from sources import jobspy_source as js
+
+    monkeypatch.setattr(js, "scrape_jobs", lambda **_: pd.DataFrame())
+    avant = list(logging.getLogger("JobSpy:Indeed").handlers)
+    js._scraper("indeed", "(stage) (NLP)", "ml")
+    assert logging.getLogger("JobSpy:Indeed").handlers == avant
+

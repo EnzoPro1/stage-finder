@@ -57,7 +57,7 @@ RESULTATS_PAR_TERME = 30
 #   france_travail API, clé requise    — gisement public français
 #   careerjet      API, sans clé       — méta-moteur (des centaines de sites FR)
 #   free_work      API, sans clé       — job board tech/IT français
-#   jobspy         scraping, sans clé  — Indeed / LinkedIn / Google Jobs
+#   jobspy         scraping, sans clé  — Indeed / LinkedIn (Google Jobs retiré)
 #
 # JOOBLE EST RETIRÉE, et son module reste au catalogue (`sources/registry.py`)
 # pour qu'on puisse la retester sans la réécrire.
@@ -103,6 +103,12 @@ SOURCES_ECARTEES_STAGES = {
     "jooble": (
         "« Paris » résolu en Paris, Texas : 86 offres américaines sur 86 "
         "(2026-09-05)"
+    ),
+    # Un SITE de JobSpy, pas une source du catalogue : écrit « jobspy:<site> ».
+    "jobspy:google": (
+        "0 offre en 36 runs (2026-07-14 → 09-17) ; Google répond 200 avec une "
+        "page qui exige JavaScript, sans offre ni curseur — le scraper JobSpy "
+        "ne la lit plus, quelle que soit la requête (3 formes essayées)"
     ),
 }
 
@@ -183,13 +189,36 @@ FRANCE_TRAVAIL_RESULTATS = 150
 #                              jobspy 15 ........................... ≈ 47
 
 # --- JobSpy : une requête par famille, en OU --------------------------------
+# Sites interrogés. Chacun a sa ligne dans le bilan (`jobspy:indeed`…).
+#
+# GOOGLE JOBS EST RETIRÉ (cf. SOURCES_ECARTEES_STAGES). Sondé le 2026-09-17 :
+# trois formes de requête — terme + ville, `google_search_term` en langage
+# naturel (« … jobs near Paris, France in the last week », la syntaxe que
+# JobSpy documente), et sans `google_search_term` — rendent 0 offre, JobSpy
+# journalisant « initial cursor not found ». La page brute : statut 200,
+# 92 Ko, ni données d'offres ni curseur de pagination, pas de mur de
+# consentement ni de page anti-robot, mais une demande de JavaScript. Le
+# scraper lit un HTML que Google ne sert plus à un client sans navigateur :
+# aucune formulation de requête n'y change rien.
+JOBSPY_SITES = ["indeed", "linkedin"]
+
 # Indeed et LinkedIn comprennent OU, guillemets et parenthèses (documenté par
 # JobSpy) : 3 sites × 5 familles = 15 appels, autant qu'avant avec 5 termes.
 # Une requête de famille ramène davantage qu'une requête de terme, d'où un
 # plafond par SITE : Indeed pagine sans se braquer, LinkedIn bloque vers la
 # 10e page par IP et va chercher la description de CHAQUE offre (un appel de
 # plus par résultat) — il reste donc au plafond d'avant.
-JOBSPY_RESULTATS_PAR_SITE = {"indeed": 100, "linkedin": 30, "google": 30}
+#
+# Contrôle en réel du 2026-09-17 (lignes rendues, puis gardées par les filtres) :
+#
+#   indeed    ai_engineering 100 / 55   ml 100 / 68   mlops 24 / 5
+#             inference 27 / 10         cyber 100 / 35          ~1 s par requête
+#   linkedin  30 / 14 à 20 pour chaque famille                  ~35-40 s par requête
+#
+# Aucun blocage ni statut d'erreur journalisé par JobSpy. LES PLAFONDS SONT
+# ATTEINTS : Indeed sur 3 familles sur 5, LinkedIn sur les 5 — la collecte y
+# est tronquée par ce réglage, pas par le marché.
+JOBSPY_RESULTATS_PAR_SITE = {"indeed": 100, "linkedin": 30}
 
 # ---------------------------------------------------------------------------
 # 2 ter) Métiers suivis par le tableau de bord marché (market.py)

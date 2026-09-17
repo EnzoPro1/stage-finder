@@ -92,18 +92,19 @@ def test_le_seuil_de_sterilite_est_la_frontiere_annoncee():
 # ---------------------------------------------------------------------------
 # Panne franche vs marché vide vs résultat partiel
 # ---------------------------------------------------------------------------
-def test_panne_et_marche_vide_ne_s_ecrivent_plus_pareil():
-    """Le défaut d'origine : `[]` pour une panne, `[]` pour un marché vide."""
+def test_panne_et_zero_silencieux_sont_muets_mais_ne_s_ecrivent_pas_pareil():
+    """0 offre est MUET, avec ou sans incident — c'est la forme exacte de la
+    panne de Google Jobs, 200 à chaque requête et 0 offre en 36 runs. Le
+    message, lui, distingue la panne franche du zéro silencieux."""
     panne = observabilite.Releve(["jooble"])
     _lot(panne, "jooble", brut=0, gardees=0, incidents=[("http", "HTTP 403")])
 
-    vide = observabilite.Releve(["jooble"])
-    _lot(vide, "jooble", brut=0, gardees=0)
+    silence = observabilite.Releve(["jooble"])
+    _lot(silence, "jooble", brut=0, gardees=0)
 
-    assert panne.lignes["jooble"].muette
-    assert not vide.lignes["jooble"].muette
-    assert "MUETTE" in panne.alertes()[0]
-    assert vide.alertes() == []
+    assert panne.lignes["jooble"].muette and silence.lignes["jooble"].muette
+    assert "MUETTE" in panne.alertes()[0] and "c'est une panne" in panne.alertes()[0]
+    assert "MUETTE" in silence.alertes()[0] and "sans incident" in silence.alertes()[0]
 
 
 def test_resultat_partiel_est_signale_sans_etre_confondu_avec_une_panne():
@@ -156,22 +157,17 @@ def test_une_categorie_inconnue_ne_fait_pas_echouer_le_diagnostic():
 # ---------------------------------------------------------------------------
 # Repliage « jobspy:indeed » -> « jobspy »
 # ---------------------------------------------------------------------------
-def test_les_sites_jobspy_sont_replies_sur_la_source_du_catalogue():
-    """Sans repliage, `jobspy` afficherait 100 brut / 0 gardée — une fausse
-    alerte « stérile » sur la source la plus productive du projet."""
-    r = observabilite.Releve(["jobspy"])
-    r.compter_brut("jobspy", 100)
-    r.compter_normalisees("jobspy", 100)
-    for _ in range(40):
-        r.compter_survivante("jobspy:indeed")
-    for _ in range(29):
-        r.compter_survivante("jobspy:linkedin")
-    r.compter_rejet("jobspy:indeed", "hors-IDF")
+def test_chaque_site_jobspy_a_sa_ligne():
+    """Replié sur une ligne `jobspy`, Google Jobs a rendu 0 offre en 36 runs sans
+    que le total d'Indeed et LinkedIn laisse rien voir."""
+    r = observabilite.Releve(["jobspy:indeed", "jobspy:linkedin", "jobspy:google"])
+    _lot(r, "jobspy:indeed", brut=60, gardees=40)
+    _lot(r, "jobspy:linkedin", brut=30, gardees=29)
 
-    assert set(r.lignes) == {"jobspy"}, "aucune ligne fantôme par site"
-    assert r.lignes["jobspy"].survivantes == 69
-    assert not r.lignes["jobspy"].sterile
-    assert r.alertes() == []
+    assert "jobspy" not in r.lignes, "plus de ligne repliée"
+    assert r.lignes["jobspy:indeed"].survivantes == 40
+    alertes = r.alertes()
+    assert len(alertes) == 1 and "« jobspy:google » MUETTE" in alertes[0]
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +269,9 @@ def test_deux_collectes_successives_ne_cumulent_pas_leurs_compteurs(monkeypatch)
     assert releve2.lignes["adzuna"].brut == 3
     assert releve2.lignes["adzuna"].survivantes == 3
     assert not releve2.lignes["adzuna"].sterile, "l'état stérile ne se traîne pas"
-    assert releve2.alertes() == []
+    # Les items factices ne portent aucune famille : seules les alertes de
+    # SOURCE comptent ici.
+    assert [a for a in releve2.alertes() if a.startswith("Source")] == []
 
     # Et le relevé du premier run n'a pas été rétroactivement modifié.
     assert releve1.lignes["adzuna"].brut == 12
@@ -372,4 +370,90 @@ def test_la_collecte_de_stages_annonce_france_travail_ecartee(monkeypatch):
     assert releve.perimetre == "stages"
     assert "france_travail" in releve.ecartees
     assert releve.resume()["ecartees"] == config.SOURCES_ECARTEES_STAGES
+
+
+# ---------------------------------------------------------------------------
+# JobSpy : une ligne par site depuis la collecte réelle
+# ---------------------------------------------------------------------------
+def _brut_jobspy(site, i):
+    return {"id": f"{site[:2]}-{i}", "site": site, "title": f"Stage IA {i}",
+            "company": "ACME", "location": "Paris, A8, FR", "description": "d",
+            "job_url": f"https://{site}/{i}", "date_posted": date.today().isoformat()}
+
+
+def test_la_collecte_amorce_une_ligne_par_site_et_signale_le_site_muet(monkeypatch):
+    import main
+
+    monkeypatch.setattr(config, "JOBSPY_SITES", ["indeed", "linkedin"])
+    lot = [_brut_jobspy("indeed", i) for i in range(3)]
+    monkeypatch.setattr(main.registry, "sources_actives",
+                        lambda noms: [_SourceFactice("jobspy", lot, sequentiel=True)])
+    offres = main.collecter(utiliser_jobspy=True)
+    main.filtrer(offres)
+    r = observabilite.actif()
+
+    assert set(r.lignes) == {"jobspy:indeed", "jobspy:linkedin"}
+    assert (r.lignes["jobspy:indeed"].brut, r.lignes["jobspy:indeed"].normalisees,
+            r.lignes["jobspy:indeed"].survivantes) == (3, 3, 3)
+    assert r.lignes["jobspy:linkedin"].muette
+    assert any("« jobspy:linkedin » MUETTE" in a for a in r.alertes())
+
+
+def test_un_echec_d_import_de_jobspy_touche_chaque_site(monkeypatch):
+    import main
+
+    class _Casse(_SourceFactice):
+        def recuperer(self):
+            raise ImportError("pas de jobspy")
+
+    monkeypatch.setattr(config, "JOBSPY_SITES", ["indeed", "linkedin"])
+    monkeypatch.setattr(main.registry, "sources_actives",
+                        lambda noms: [_Casse("jobspy", [], sequentiel=True)])
+    main.collecter(utiliser_jobspy=True)
+    r = observabilite.actif()
+    assert all(r.lignes[l].incidents[0].categorie == "import"
+               for l in ("jobspy:indeed", "jobspy:linkedin"))
+
+
+# ---------------------------------------------------------------------------
+# Par famille
+# ---------------------------------------------------------------------------
+def test_brut_et_gardees_par_famille(monkeypatch):
+    import main
+    from sources import provenance
+
+    lot = (provenance.marquer([_brut_adzuna("Stage NLP")], ["ml"])
+           + provenance.marquer([_brut_adzuna("Stage LLMOps")], ["ml", "mlops"])
+           + provenance.marquer([_brut_adzuna("Data Engineer")], ["mlops"]))
+    monkeypatch.setattr(main.registry, "sources_actives",
+                        lambda noms: [_SourceFactice("adzuna", lot)])
+    main.filtrer(main.collecter(utiliser_jobspy=False))
+    r = observabilite.actif()
+
+    assert (r.familles["ml"].brut, r.familles["ml"].survivantes) == (2, 2)
+    assert (r.familles["mlops"].brut, r.familles["mlops"].survivantes) == (2, 1)
+    assert r.familles["cyber"].brut == 0, "amorcée depuis recherche.yaml"
+    assert any("Famille « cyber » MUETTE" in a for a in r.alertes())
+    assert not any("« ml » MUETTE" in a for a in r.alertes())
+
+
+def test_le_tableau_affiche_les_familles_dans_l_ordre_du_fichier():
+    r = observabilite.demarrer(["adzuna"], familles=["ai_engineering", "ml"])
+    _lot(r, "adzuna", brut=5, gardees=5)
+    r.compter_brut_familles([["ml"], ["ml"]])
+    lignes = observabilite.rendre_tableau(r).splitlines()
+    debut = next(i for i, l in enumerate(lignes) if l.startswith("famille"))
+    assert lignes[debut + 2].split() == ["ai_engineering", "0", "0"]
+    assert lignes[debut + 3].split() == ["ml", "2", "0"]
+
+
+# ---------------------------------------------------------------------------
+# Google Jobs : écarté, et dit pourquoi
+# ---------------------------------------------------------------------------
+def test_google_jobs_n_est_plus_interroge_et_figure_dans_les_ecartees():
+    assert "google" not in config.JOBSPY_SITES
+    assert "JavaScript" in config.SOURCES_ECARTEES_STAGES["jobspy:google"]
+    r = observabilite.demarrer([], ecartees=config.SOURCES_ECARTEES_STAGES, perimetre="stages")
+    assert any(l.startswith("⊘ Source « jobspy:google » désactivée pour les stages")
+               for l in observabilite.rendre_tableau(r).splitlines())
 

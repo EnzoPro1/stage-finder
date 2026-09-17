@@ -22,6 +22,14 @@ Par source : le BRUT (ce que l'API a rendu), le NORMALISÉ (ce qui est
 convertible au schéma commun), le SURVIVANT (ce qui passe les filtres durs), le
 détail des rejets, et les INCIDENTS (403, timeout, JSON illisible, clé absente).
 
+Une « source » est ici le nom que porte l'offre : JobSpy a UNE ligne par site
+(`jobspy:indeed`, `jobspy:linkedin`). Les sites étaient repliés sur une ligne
+`jobspy` unique — et Google Jobs a rendu 0 offre pendant 36 runs sans que
+personne le voie, noyé dans le total d'Indeed et LinkedIn.
+
+Par FAMILLE de requêtes (recherche.yaml) : le brut rendu et le nombre gardé.
+Une famille que plus aucune source ne sert s'annonce comme une source muette.
+
 Un incident n'est PAS une exception : les sources continuent d'absorber leurs
 erreurs et de rendre `[]` — cette garantie-là ne bouge pas. On ajoute seulement
 une trace à côté, pour que l'absorption cesse d'être silencieuse.
@@ -123,13 +131,29 @@ class LigneSource:
 
     @property
     def muette(self) -> bool:
-        """N'a rien rendu DU TOUT, et a signalé pourquoi : panne franche."""
-        return self.brut == 0 and bool(self.incidents)
+        """N'a rien rendu DU TOUT — avec ou sans incident.
+
+        Ne s'exigeait qu'avec un incident, pour ne pas crier sur un marché
+        vide. Mais « 0 sans incident » est précisément la forme d'une panne
+        silencieuse : Google Jobs répondait 200 à chaque requête, avec une page
+        sans offre, et n'a rien rapporté en 36 runs. Sur une requête large, un
+        vrai marché vide est l'exception ; il se lit, il ne se tait pas.
+        """
+        return self.brut == 0
 
     @property
     def degradee(self) -> bool:
         """A rendu quelque chose, mais pas tout : résultat partiel, à lire comme tel."""
         return self.brut > 0 and bool(self.incidents)
+
+
+@dataclass
+class LigneFamille:
+    """Ce qu'une famille de requêtes a rapporté, toutes sources confondues."""
+
+    nom: str
+    brut: int = 0
+    survivantes: int = 0
 
 
 class Releve:
@@ -140,9 +164,13 @@ class Releve:
         sources: list[str] | None = None,
         ecartees: dict[str, str] | None = None,
         perimetre: str = "",
+        familles: list[str] | None = None,
     ) -> None:
         self._verrou = threading.Lock()
         self.lignes: dict[str, LigneSource] = {}
+        # Amorcées comme les sources : une famille qui ne rapporte rien doit
+        # apparaître à 0, pas disparaître du tableau.
+        self.familles: dict[str, LigneFamille] = {f: LigneFamille(f) for f in familles or []}
         # Sources RETIRÉES volontairement de ce périmètre, avec leur raison.
         # Elles n'ont pas de ligne — elles ne tournent pas — mais le bilan les
         # nomme en tête : sans ça, une source retirée et une source oubliée
@@ -179,18 +207,33 @@ class Releve:
         with self._verrou:
             self._ligne(source).normalisees += int(n)
 
-    def compter_survivante(self, source: str) -> None:
+    def compter_survivante(self, source: str, familles: list[str] = ()) -> None:
         with self._verrou:
-            self._ligne(racine(source)).survivantes += 1
+            self._ligne(source).survivantes += 1
+            for famille in familles:
+                self._famille(famille).survivantes += 1
+
+    def compter_brut_familles(self, familles_par_item: list[list[str]]) -> None:
+        """Brut par famille : un item trouvé par deux familles compte pour les deux."""
+        with self._verrou:
+            for familles in familles_par_item:
+                for famille in familles:
+                    self._famille(famille).brut += 1
+
+    def _famille(self, nom: str) -> LigneFamille:
+        """Ligne de la famille, créée à la volée. À appeler VERROU TENU."""
+        if nom not in self.familles:
+            self.familles[nom] = LigneFamille(nom)
+        return self.familles[nom]
 
     def compter_fusion(self, source: str) -> None:
         """Une offre supprimee par la deduplication (exacte ou floue)."""
         with self._verrou:
-            self._ligne(racine(source)).fusions += 1
+            self._ligne(source).fusions += 1
 
     def compter_rejet(self, source: str, motif: str) -> None:
         with self._verrou:
-            rejets = self._ligne(racine(source)).rejets
+            rejets = self._ligne(source).rejets
             rejets[motif] = rejets.get(motif, 0) + 1
 
     # -- Lecture -----------------------------------------------------------
@@ -208,11 +251,17 @@ class Releve:
         messages: list[str] = []
         for ligne in self.triees():
             causes = ", ".join(sorted({i.categorie for i in ligne.incidents}))
-            if ligne.muette:
+            if ligne.muette and ligne.incidents:
                 messages.append(
                     f"Source « {ligne.nom} » MUETTE : 0 offre rendue, "
                     f"{len(ligne.incidents)} incident(s) [{causes}]. "
                     f"Ce n'est pas un marché vide, c'est une panne."
+                )
+            elif ligne.muette:
+                messages.append(
+                    f"Source « {ligne.nom} » MUETTE : 0 offre rendue, sans incident "
+                    f"signalé — source cassée en silence, requête qu'elle ne comprend "
+                    f"pas, ou marché réellement vide. À vérifier."
                 )
             elif ligne.sterile:
                 messages.append(
@@ -226,6 +275,12 @@ class Releve:
                     f"Source « {ligne.nom} » DÉGRADÉE : {ligne.brut} offre(s) rendue(s) "
                     f"malgré {len(ligne.incidents)} incident(s) [{causes}] — "
                     f"résultat partiel."
+                )
+        for famille in sorted(self.familles.values(), key=lambda f: f.nom):
+            if famille.brut == 0:
+                messages.append(
+                    f"Famille « {famille.nom} » MUETTE : aucune source n'a rien rendu "
+                    f"pour ses termes."
                 )
         return messages
 
@@ -250,8 +305,16 @@ class Releve:
                 }
                 for l in self.triees()
             ],
+            "familles": [
+                {"nom": f.nom, "brut": f.brut, "survivantes": f.survivantes}
+                for f in self.familles_triees()
+            ],
             "alertes": self.alertes(),
         }
+
+    def familles_triees(self) -> list[LigneFamille]:
+        """Familles dans l'ordre d'amorçage (celui de recherche.yaml), puis les autres."""
+        return list(self.familles.values())
 
 
 def _detail_rejets(ligne: LigneSource) -> str:
@@ -267,18 +330,6 @@ def _detail_rejets(ligne: LigneSource) -> str:
     return ", ".join(base) or "sans détail"
 
 
-def racine(source: str) -> str:
-    """« jobspy:indeed » -> « jobspy ». Aligne les compteurs sur le catalogue.
-
-    Le nom porté par une offre est celui du SITE (`normalize` préfixe JobSpy
-    par son site d'origine), là où le brut est compté par SOURCE du catalogue.
-    Sans ce repliage, `jobspy` afficherait un brut sans survivantes et trois
-    lignes fantômes de survivantes sans brut — soit une fausse alerte
-    « stérile » sur la source la plus productive du projet.
-    """
-    return source.split(":", 1)[0]
-
-
 # ---------------------------------------------------------------------------
 # Relevé actif du run en cours
 # ---------------------------------------------------------------------------
@@ -290,15 +341,18 @@ def demarrer(
     sources: list[str] | None = None,
     ecartees: dict[str, str] | None = None,
     perimetre: str = "",
+    familles: list[str] | None = None,
 ) -> Releve:
     """Installe un relevé neuf pour la collecte qui commence, et le retourne.
 
+    ``sources`` : les LIGNES attendues — une par site pour JobSpy.
     ``ecartees`` : sources retirées volontairement du périmètre, et pourquoi —
     nommées en tête du bilan (cf. ``Releve.messages_ecartees``).
+    ``familles`` : familles de requêtes attendues, amorcées à 0.
     """
     global _actif
     with _verrou_actif:
-        _actif = Releve(sources, ecartees=ecartees, perimetre=perimetre)
+        _actif = Releve(sources, ecartees=ecartees, perimetre=perimetre, familles=familles)
         return _actif
 
 
@@ -372,6 +426,9 @@ def journaliser(releve: Releve | None = None) -> None:
         return
     for message in releve.messages_ecartees():
         logger.info("%s", message)
+    for famille in releve.familles_triees():
+        logger.info("Famille %-15s brut %4d -> gardées %4d",
+                    famille.nom, famille.brut, famille.survivantes)
     for ligne in releve.triees():
         a_detailler = bool(ligne.rejets or ligne.perdues_normalisation)
         logger.info(
@@ -406,6 +463,9 @@ def rendre_tableau(releve: Releve | None = None) -> str:
             detail = (detail + "  " if detail else "") + f"⚠ {len(l.incidents)} incident(s) [{causes}]"
         lignes.append(f"{l.nom:16}{l.brut:7}{l.normalisees:9}{l.survivantes:9}"
                       f"{-l.fusions if l.fusions else 0:7}{l.retenues:10}   {detail}")
+    if releve.familles:
+        lignes += ["", f"{'famille':16}{'brut':>7}{'gardées':>18}", "─" * 41]
+        lignes += [f"{f.nom:16}{f.brut:7}{f.survivantes:18}" for f in releve.familles_triees()]
     alertes = releve.alertes()
     if alertes:
         lignes.append("")

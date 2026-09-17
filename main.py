@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import console  # noqa: F401 - force UTF-8 sur la console Windows (badge ★, emoji)
 import config
 from config_schema import valider_config
-from normalize import Offre, normaliser
+import recherche
+from normalize import Offre, normaliser, source_affichee
 from filters import filtrer
 import dedup
 import extract
@@ -36,6 +38,7 @@ import report
 import storage
 import verifier
 from sources import RedactingFilter, registry
+from sources.provenance import familles_de
 
 logger = logging.getLogger("job-finder")
 
@@ -55,6 +58,17 @@ def _configurer_logs() -> None:
         logging.getLogger(bruyant).setLevel(logging.WARNING)
 
 
+def lignes_du_bilan(source: registry.Source) -> list[str]:
+    """Les lignes qu'une source occupe dans le bilan : une par site pour JobSpy.
+
+    Elles sont amorcées AVANT la collecte, pour qu'un site qui ne rend rien
+    apparaisse à 0 — donc MUET — au lieu de ne pas apparaître du tout.
+    """
+    if source.nom == "jobspy":
+        return [f"jobspy:{site}" for site in config.JOBSPY_SITES]
+    return [source.nom]
+
+
 def _collecter_source(source: registry.Source) -> list[Offre]:
     """Interroge UNE source et renvoie ses offres normalisées.
 
@@ -69,14 +83,18 @@ def _collecter_source(source: registry.Source) -> list[Offre]:
     try:
         brutes = source.recuperer()()
     except Exception as err:  # noqa: BLE001 - une source ne doit jamais tout casser
-        observabilite.signaler(source.nom, "import", f"{type(err).__name__}: {err}")
+        for ligne in lignes_du_bilan(source):
+            observabilite.signaler(ligne, "import", f"{type(err).__name__}: {err}")
         logger.warning("Source « %s » en échec complet : %s", source.nom, err)
         return []
     offres = normaliser(source.nom, brutes)
     releve = observabilite.actif()
     if releve is not None:
-        releve.compter_brut(source.nom, len(brutes))
-        releve.compter_normalisees(source.nom, len(offres))
+        for ligne, n in Counter(source_affichee(source.nom, b) for b in brutes).items():
+            releve.compter_brut(ligne, n)
+        for ligne, n in Counter(o.source for o in offres).items():
+            releve.compter_normalisees(ligne, n)
+        releve.compter_brut_familles([familles_de(b) for b in brutes])
     return offres
 
 
@@ -102,8 +120,9 @@ def collecter(utiliser_jobspy: bool) -> list[Offre]:
     # Relevé posé AVANT le premier appel et amorcé avec les sources attendues :
     # une source qui échoue dès l'import doit apparaître en panne dans le
     # tableau, pas en être absente.
-    observabilite.demarrer([s.nom for s in actives],
-                           ecartees=config.SOURCES_ECARTEES_STAGES, perimetre="stages")
+    observabilite.demarrer([ligne for s in actives for ligne in lignes_du_bilan(s)],
+                           ecartees=config.SOURCES_ECARTEES_STAGES, perimetre="stages",
+                           familles=recherche.charger().noms_familles())
 
     api = [s for s in actives if not s.sequentiel]
     scraping = [s for s in actives if s.sequentiel]

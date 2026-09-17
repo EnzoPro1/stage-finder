@@ -144,7 +144,7 @@ def filtrer(offres: list[Offre]) -> list[Offre]:
             rejeter(offre, "trop-vieux")
             continue
         if releve is not None:
-            releve.compter_survivante(offre.source)
+            releve.compter_survivante(offre.source, offre.familles)
         gardees.append(offre)
 
     total_rejets = sum(rejets.values())

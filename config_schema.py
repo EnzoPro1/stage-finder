@@ -46,6 +46,7 @@ class ConfigModel(BaseModel):
     CAREERJET_LOCALE: str = Field(min_length=2)
     FREE_WORK_PAGES: int = Field(gt=0, le=20)
     FRANCE_TRAVAIL_RESULTATS: int = Field(gt=0, le=150)  # plafond de l'API
+    JOBSPY_SITES: list[str] = Field(min_length=1)
     JOBSPY_RESULTATS_PAR_SITE: dict[str, int] = Field(min_length=1)
 
     # --- Tableau de bord marché ---
@@ -149,10 +150,14 @@ class ConfigModel(BaseModel):
 
         problemes = []
         for nom, raison in self.SOURCES_ECARTEES_STAGES.items():
-            if nom not in CATALOGUE:
+            # « jobspy:google » : un site d'une source du catalogue.
+            base, _, site = nom.partition(":")
+            if base not in CATALOGUE:
                 problemes.append(f"« {nom} » inconnue du catalogue")
-            if nom in self.SOURCES_ACTIVES:
+            if not site and nom in self.SOURCES_ACTIVES:
                 problemes.append(f"« {nom} » à la fois active et écartée")
+            if site and base == "jobspy" and site in self.JOBSPY_SITES:
+                problemes.append(f"« {nom} » à la fois dans JOBSPY_SITES et écartée")
             if not raison.strip():
                 problemes.append(f"« {nom} » écartée sans raison")
         if problemes:
