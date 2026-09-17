@@ -58,6 +58,9 @@ RESULTATS_PAR_TERME = 30
 #   careerjet      API, sans clé       — méta-moteur (des centaines de sites FR)
 #   free_work      API, sans clé       — job board tech/IT français
 #   jobspy         scraping, sans clé  — Indeed / LinkedIn (Google Jobs retiré)
+#   greenhouse     API publique        — pages carrières (liste dans recherche.yaml)
+#   lever          API publique        — pages carrières (liste dans recherche.yaml)
+#   ashby          API publique        — pages carrières (liste dans recherche.yaml)
 #
 # JOOBLE EST RETIRÉE, et son module reste au catalogue (`sources/registry.py`)
 # pour qu'on puisse la retester sans la réécrire.
@@ -81,6 +84,12 @@ SOURCES_ACTIVES = [
     "careerjet",
     "free_work",
     "jobspy",
+    # Pages carrières d'entreprises (recherche.yaml, bloc `entreprises`). Une
+    # liste vide les laisse tourner à vide : 0 appel, et une ligne MUETTE au
+    # bilan qui le rappelle.
+    "greenhouse",
+    "lever",
+    "ashby",
 ]
 
 # Sources du catalogue VOLONTAIREMENT absentes de `SOURCES_ACTIVES` pour les
@@ -690,7 +699,7 @@ TIMEOUT_HTTP = 20
 DELAI_ENTRE_REQUETES = 4
 
 # Nombre de threads pour la collecte parallèle des sources API (I/O-bound).
-# À garder >= au nombre de sources API de SOURCES_ACTIVES (5 aujourd'hui), sinon
+# À garder >= au nombre de sources API de SOURCES_ACTIVES (6 aujourd'hui), sinon
 # les dernières attendent qu'un thread se libère alors qu'elles ne font
 # qu'attendre le réseau. JobSpy reste séquentiel par politesse.
 MAX_THREADS_COLLECTE = 6

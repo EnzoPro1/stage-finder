@@ -41,6 +41,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -183,6 +184,18 @@ class JobsEtudiants(BaseModel):
         return {slug(t): Famille(fr=[t]) for t in self.termes}
 
 
+class EntrepriseATS(BaseModel):
+    """Une entreprise dont on lit la page carrières publique (sources/ats.py)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nom: str = Field(min_length=1)
+    plateforme: Literal["greenhouse", "lever", "ashby"]
+    # L'identifiant de tableau tel qu'il apparaît dans l'URL publique :
+    # boards.greenhouse.io/<id>, jobs.lever.co/<id>, jobs.ashbyhq.com/<id>.
+    identifiant: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
 class Recherche(BaseModel):
     """Contenu validé de ``recherche.yaml``."""
 
@@ -190,6 +203,19 @@ class Recherche(BaseModel):
 
     familles: dict[str, Famille] = Field(min_length=1)
     student_jobs: JobsEtudiants | None = None
+    # Vide est valide : les sources Greenhouse / Lever / Ashby rendent alors [].
+    entreprises: list[EntrepriseATS] = Field(default_factory=list)
+
+    @field_validator("entreprises")
+    @classmethod
+    def _entreprises_distinctes(cls, entreprises: list[EntrepriseATS]) -> list[EntrepriseATS]:
+        vues: set[tuple[str, str]] = set()
+        for e in entreprises:
+            cle = (e.plateforme, e.identifiant.casefold())
+            if cle in vues:
+                raise ValueError(f"entreprise en double : {e.plateforme} « {e.identifiant} »")
+            vues.add(cle)
+        return entreprises
 
     @model_validator(mode="after")
     def _etiquettes_disjointes(self) -> "Recherche":

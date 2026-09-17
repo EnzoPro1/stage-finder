@@ -187,6 +187,10 @@ _CHAMP_IDENTIFIANT = {
     "jobspy": "id",
     "france_travail": "id",
     "free_work": "id",
+    # Pages carrières (sources/ats.py) : identifiant d'annonce de la plateforme.
+    "greenhouse": "id",
+    "lever": "id",
+    "ashby": "id",
 }
 
 # Careerjet : titre, entreprise, lieu, site d'origine. La date est EXCLUE :
@@ -404,6 +408,65 @@ def normaliser_free_work(raw: dict) -> Offre:
     )
 
 
+# ---------------------------------------------------------------------------
+# Pages carrières : Greenhouse, Lever, Ashby (sources/ats.py)
+# ---------------------------------------------------------------------------
+# `sources/ats.py` pose sur chaque item `_entreprise` (le nom de la liste de
+# recherche.yaml, que Lever et Ashby ne donnent pas) et `_lieu` (le premier lieu
+# français d'une annonce multi-sites).
+
+
+def normaliser_greenhouse(raw: dict) -> Offre:
+    """Annonce Greenhouse. `content` est du HTML ÉCHAPPÉ : on le décode AVANT de
+    retirer les balises, sinon « &lt;p&gt; » deviendrait « <p> » dans le texte."""
+    return Offre(
+        title=_texte(raw.get("title")),
+        company=_texte(raw.get("_entreprise") or raw.get("company_name")),
+        location=_texte(raw.get("_lieu") or (raw.get("location") or {}).get("name")),
+        description=_sans_html(html_module.unescape(_texte(raw.get("content")))),
+        url=_texte(raw.get("absolute_url")),
+        source="greenhouse",
+        # `first_published` : date de première publication, stable ;
+        # `updated_at` bouge à chaque retouche de l'annonce.
+        posted_at=_texte(raw.get("first_published") or raw.get("updated_at")),
+        salary="",
+    )
+
+
+def normaliser_lever(raw: dict) -> Offre:
+    """Annonce Lever. `createdAt` est en MILLISECONDES depuis l'époque Unix."""
+    cree = raw.get("createdAt")
+    posted_at = ""
+    if isinstance(cree, (int, float)) and cree > 0:
+        from datetime import datetime, timezone
+
+        posted_at = datetime.fromtimestamp(cree / 1000, tz=timezone.utc).isoformat()
+    return Offre(
+        title=_texte(raw.get("text")),
+        company=_texte(raw.get("_entreprise")),
+        location=_texte(raw.get("_lieu") or (raw.get("categories") or {}).get("location")),
+        description=_texte(raw.get("descriptionPlain")),
+        url=_texte(raw.get("hostedUrl")),
+        source="lever",
+        posted_at=posted_at,
+        salary="",
+    )
+
+
+def normaliser_ashby(raw: dict) -> Offre:
+    """Annonce Ashby."""
+    return Offre(
+        title=_texte(raw.get("title")),
+        company=_texte(raw.get("_entreprise")),
+        location=_texte(raw.get("_lieu") or raw.get("location")),
+        description=_texte(raw.get("descriptionPlain")),
+        url=_texte(raw.get("jobUrl")),
+        source="ashby",
+        posted_at=_texte(raw.get("publishedAt")),
+        salary="",
+    )
+
+
 # Table de dispatch : nom logique de source -> fonction de normalisation.
 _NORMALISEURS = {
     "adzuna": normaliser_adzuna,
@@ -412,6 +475,9 @@ _NORMALISEURS = {
     "france_travail": normaliser_france_travail,
     "careerjet": normaliser_careerjet,
     "free_work": normaliser_free_work,
+    "greenhouse": normaliser_greenhouse,
+    "lever": normaliser_lever,
+    "ashby": normaliser_ashby,
 }
 
 

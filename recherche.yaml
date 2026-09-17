@@ -138,3 +138,34 @@ student_jobs:
            "préparateur de commandes", "serveur", "animateur", "soutien scolaire",
            "cours particuliers"]
 
+
+# =============================================================================
+#  Pages carrières d'entreprises (stages) — sources greenhouse, lever, ashby
+# =============================================================================
+#
+# Une ligne par entreprise. `identifiant` = le segment de l'URL publique :
+#   greenhouse  boards.greenhouse.io/<identifiant>   (ou ?for=<identifiant>)
+#   lever       jobs.lever.co/<identifiant>
+#   ashby       jobs.ashbyhq.com/<identifiant>
+#
+# Une liste vide est valide. Un identifiant inconnu (404) apparaît en incident
+# dans le bilan ; un tableau vide (200, aucune annonce) en conseil.
+#
+# EXEMPLES, tous vérifiés en réel le 2026-09-17 (annonces ouvertes / dont en
+# France / dont intitulé de stage en France) — à garder, retirer ou compléter :
+#
+#   Doctolib   greenhouse  150 / 71 / 28
+#   Datadog    greenhouse  447 / 57 / 4
+#   Pigment    lever       136 / 47 / 2
+#   Qonto      lever        46 / 32 / 1
+#   Photoroom  ashby        17 / 15 / 1
+#
+# Essayés et ÉCARTÉS : mistral (lever : 200 mais 0 annonce), huggingface et
+# kyutai (absents d'Ashby), contentsquare (absent de Greenhouse), alan,
+# backmarket, payfit, ledger (absents de Lever).
+entreprises:
+  - {nom: "Doctolib", plateforme: greenhouse, identifiant: doctolib}
+  - {nom: "Datadog", plateforme: greenhouse, identifiant: datadog}
+  - {nom: "Pigment", plateforme: lever, identifiant: pigment}
+  - {nom: "Qonto", plateforme: lever, identifiant: qonto}
+  - {nom: "Photoroom", plateforme: ashby, identifiant: photoroom}

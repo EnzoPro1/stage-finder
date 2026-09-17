@@ -55,6 +55,10 @@ CATALOGUE: dict[str, Source] = {
                cle_requise="FRANCE_TRAVAIL_ID / FRANCE_TRAVAIL_KEY"),
         Source("careerjet", "sources.careerjet", "Careerjet (méta-moteur, API)"),
         Source("free_work", "sources.free_work", "Free-Work (job board tech, API)"),
+        # Pages carrières d'entreprises : la liste vit dans recherche.yaml.
+        Source("greenhouse", "sources.greenhouse", "Greenhouse (pages carrières, API publique)"),
+        Source("lever", "sources.lever", "Lever (pages carrières, API publique)"),
+        Source("ashby", "sources.ashby", "Ashby (pages carrières, API publique)"),
         Source("jobspy", "sources.jobspy_source", "JobSpy (Indeed / LinkedIn / Google)",
                sequentiel=True),
     ]
