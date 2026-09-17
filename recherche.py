@@ -121,8 +121,8 @@ class Recherche(BaseModel):
     def termes(self) -> list[TermeInterroge]:
         """Chaque terme distinct (casse ignorée), avec les familles qui l'écrivent.
 
-        L'ordre suit le fichier (première apparition) : la rotation d'une
-        source par terme doit être stable d'un run à l'autre, donc déterministe.
+        L'ordre suit le fichier (première apparition) : une source par terme
+        interroge dans le même ordre d'un run à l'autre.
         """
         ordre: list[str] = []
         premier: dict[str, str] = {}
@@ -147,7 +147,7 @@ class Recherche(BaseModel):
 #
 #   expression_ou   Careerjet, Indeed, LinkedIn — OU, guillemets, parenthèses
 #   mots_isoles     Adzuna — `what_or` ne connaît que des mots
-#   tranches        France Travail — conjonctif, donc un appel par terme
+#   termes()        France Travail — conjonctif, donc un appel par terme
 
 
 def _entre_guillemets(terme: str) -> str:
@@ -194,17 +194,6 @@ def mots_isoles(termes: list[str], ignores: list[str]) -> list[str]:
             if len(mot) > 1 and mot not in exclus and mot not in vus:
                 vus.append(mot)
     return vus
-
-
-def tranches(termes: list[TermeInterroge], nombre: int) -> list[list[TermeInterroge]]:
-    """Répartit les termes en ``nombre`` tranches, à tour de rôle, dans l'ordre du fichier.
-
-    Tour de rôle et non hachage : les tranches restent équilibrées à un terme
-    près. Le prix est qu'ajouter un terme en milieu de fichier décale la
-    tranche des suivants — sans perte, puisque chaque tranche finit par passer.
-    """
-    nombre = max(1, nombre)
-    return [termes[i::nombre] for i in range(nombre)]
 
 
 def lire(chemin: str) -> Recherche:

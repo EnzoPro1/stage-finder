@@ -43,8 +43,6 @@ stages.avant-*.db
 stages.reference-*.db
 .reference.json.tmp
 .rank_cache.json
-# État de rotation des termes France Travail (`config.CHEMIN_ROTATION`).
-.rotation.json
 .rome_cache.json
 # Temporaire de l'écriture atomique de `etiqueter.exporter_json`. Le fichier
 # final (`etiquettes.json`) est LUI versionné : c'est le corpus étiqueté, la

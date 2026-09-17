@@ -33,8 +33,10 @@
 familles:
 
   ai_engineering:
-    fr: ["ingénieur IA", "intelligence artificielle", "IA générative", "agents IA", "LLM", "agents"]
-    en: ["AI engineer", "LLM", "GenAI", "AI agents", "agents"]
+    # « agents » seul attrape « agent de sécurité », « agent d'accueil »… : il
+    # n'est interrogé qu'en phrase.
+    fr: ["ingénieur IA", "intelligence artificielle", "IA générative", "agents IA", "LLM"]
+    en: ["AI engineer", "LLM", "GenAI", "AI agents"]
 
   ml:
     fr: ["machine learning", "ingénieur machine learning", "apprentissage automatique",

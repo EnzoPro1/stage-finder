@@ -14,7 +14,6 @@ Utilisation :
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -39,6 +38,7 @@ class ConfigModel(BaseModel):
 
     # --- Sources ---
     SOURCES_ACTIVES: list[str] = Field(min_length=1)
+    SOURCES_ECARTEES_STAGES: dict[str, str]
     ADZUNA_TITRES_EXIGES: list[str] = Field(min_length=1)
     ADZUNA_MOTS_IGNORES: list[str]
     ADZUNA_PAGES: int = Field(gt=0, le=20)
@@ -46,8 +46,6 @@ class ConfigModel(BaseModel):
     CAREERJET_LOCALE: str = Field(min_length=2)
     FREE_WORK_PAGES: int = Field(gt=0, le=20)
     FRANCE_TRAVAIL_RESULTATS: int = Field(gt=0, le=150)  # plafond de l'API
-    FRANCE_TRAVAIL_TRANCHES: int = Field(ge=1, le=10)
-    CHEMIN_ROTATION: Path
     JOBSPY_RESULTATS_PAR_SITE: dict[str, int] = Field(min_length=1)
 
     # --- Tableau de bord marché ---
@@ -139,6 +137,27 @@ class ConfigModel(BaseModel):
                 f"Disponibles : {', '.join(sorted(CATALOGUE))}."
             )
         return valeur
+
+    @model_validator(mode="after")
+    def _sources_ecartees_coherentes(self) -> "ConfigModel":
+        """Une source écartée existe au catalogue, a une raison, et ne tourne pas.
+
+        Écartée ET active, le bilan annoncerait une désactivation qui n'a pas
+        eu lieu — une erreur dans le seul tableau qui doit être juste.
+        """
+        from sources.registry import CATALOGUE
+
+        problemes = []
+        for nom, raison in self.SOURCES_ECARTEES_STAGES.items():
+            if nom not in CATALOGUE:
+                problemes.append(f"« {nom} » inconnue du catalogue")
+            if nom in self.SOURCES_ACTIVES:
+                problemes.append(f"« {nom} » à la fois active et écartée")
+            if not raison.strip():
+                problemes.append(f"« {nom} » écartée sans raison")
+        if problemes:
+            raise ValueError("SOURCES_ECARTEES_STAGES : " + " ; ".join(problemes))
+        return self
 
     @model_validator(mode="after")
     def _repli_rome_couvre_les_metiers(self) -> "ConfigModel":

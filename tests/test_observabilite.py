@@ -15,6 +15,7 @@ from datetime import date
 import pytest
 import requests
 
+import config
 import observabilite
 from normalize import Offre
 
@@ -330,3 +331,45 @@ def test_resume_est_serialisable():
     _lot(r, "jooble", brut=86, gardees=0, rejets={"hors-stage": 86},
          incidents=[("http", "HTTP 403")])
     assert json.loads(json.dumps(r.resume()))["alertes"]
+
+
+# ---------------------------------------------------------------------------
+# Sources écartées volontairement : nommées en tête du bilan
+# ---------------------------------------------------------------------------
+def test_une_source_ecartee_est_nommee_en_tete_du_tableau_avec_sa_raison():
+    r = observabilite.demarrer(["adzuna"], perimetre="stages",
+                               ecartees={"france_travail": "0 stage gardé sur 319"})
+    r.compter_brut("adzuna", 5)
+    tableau = observabilite.rendre_tableau(r).splitlines()
+    assert tableau[0] == ("⊘ Source « france_travail » désactivée pour les stages : "
+                          "0 stage gardé sur 319")
+    assert tableau[2].startswith("source"), "le tableau suit, après une ligne vide"
+    assert "france_travail" not in r.lignes, "écartée : pas de ligne de compteurs"
+    assert r.alertes() == [], "écartée n'est ni muette ni en panne"
+
+
+def test_une_source_ecartee_est_journalisee(caplog):
+    import logging
+
+    r = observabilite.demarrer([], ecartees={"jooble": "Paris, Texas"})
+    with caplog.at_level(logging.INFO, logger="observabilite"):
+        observabilite.journaliser(r)
+    assert "« jooble » désactivée : Paris, Texas" in caplog.text
+
+
+def test_sans_source_ecartee_le_tableau_ne_change_pas():
+    r = observabilite.demarrer(["adzuna"])
+    assert observabilite.rendre_tableau(r).splitlines()[0].startswith("source")
+
+
+def test_la_collecte_de_stages_annonce_france_travail_ecartee(monkeypatch):
+    import main
+
+    monkeypatch.setattr(main.registry, "sources_actives",
+                        lambda noms: [_SourceFactice("adzuna", [])])
+    main.collecter(utiliser_jobspy=False)
+    releve = observabilite.actif()
+    assert releve.perimetre == "stages"
+    assert "france_travail" in releve.ecartees
+    assert releve.resume()["ecartees"] == config.SOURCES_ECARTEES_STAGES
+

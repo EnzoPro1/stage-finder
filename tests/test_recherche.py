@@ -24,7 +24,8 @@ def test_fichier_du_depot_est_valide():
 
 
 @pytest.mark.parametrize("famille, termes", [
-    ("ai_engineering", ["AI engineer", "ingénieur IA", "LLM", "GenAI", "agents"]),
+    ("ai_engineering", ["AI engineer", "ingénieur IA", "LLM", "GenAI", "agents IA",
+                        "AI agents"]),
     ("ml", ["machine learning", "ingénieur machine learning", "deep learning",
             "data scientist", "NLP", "computer vision", "applied scientist",
             "research engineer"]),
@@ -37,6 +38,12 @@ def test_les_termes_demandes_sont_presents(famille, termes):
     presents = recherche.lire(recherche.CHEMIN_RECHERCHE).familles[famille].termes()
     for terme in termes:
         assert terme in presents
+
+
+def test_agents_n_est_interroge_qu_en_phrase():
+    """« agents » seul attrape « agent de sécurité » ; seules les phrases restent."""
+    termes = recherche.lire(recherche.CHEMIN_RECHERCHE).termes()
+    assert "agents" not in {t.terme.casefold() for t in termes}
 
 
 def test_chaque_famille_a_du_francais_et_de_l_anglais():

@@ -135,9 +135,20 @@ class LigneSource:
 class Releve:
     """Compteurs d'un run de collecte. Sûr à écrire depuis plusieurs threads."""
 
-    def __init__(self, sources: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        sources: list[str] | None = None,
+        ecartees: dict[str, str] | None = None,
+        perimetre: str = "",
+    ) -> None:
         self._verrou = threading.Lock()
         self.lignes: dict[str, LigneSource] = {}
+        # Sources RETIRÉES volontairement de ce périmètre, avec leur raison.
+        # Elles n'ont pas de ligne — elles ne tournent pas — mais le bilan les
+        # nomme en tête : sans ça, une source retirée et une source oubliée
+        # s'écrivent pareil, par leur absence.
+        self.ecartees: dict[str, str] = dict(ecartees or {})
+        self.perimetre = perimetre
         # Les sources attendues sont créées D'AVANCE : une source qui échoue à
         # l'import ne poserait jamais sa ligne, et disparaîtrait du tableau au
         # lieu d'y apparaître en panne — exactement le silence qu'on corrige.
@@ -218,9 +229,17 @@ class Releve:
                 )
         return messages
 
+    def messages_ecartees(self) -> list[str]:
+        """Une ligne par source retirée du périmètre, raison comprise, dans l'ordre de la config."""
+        pour = f" pour les {self.perimetre}" if self.perimetre else ""
+        return [f"⊘ Source « {nom} » désactivée{pour} : {raison}"
+                for nom, raison in self.ecartees.items()]
+
     def resume(self) -> dict:
         """Vue sérialisable du relevé (pour un rapport JSON ou un test)."""
         return {
+            "perimetre": self.perimetre,
+            "ecartees": dict(self.ecartees),
             "sources": [
                 {
                     "nom": l.nom, "brut": l.brut, "normalisees": l.normalisees,
@@ -267,11 +286,19 @@ _actif: Releve | None = None
 _verrou_actif = threading.Lock()
 
 
-def demarrer(sources: list[str] | None = None) -> Releve:
-    """Installe un relevé neuf pour la collecte qui commence, et le retourne."""
+def demarrer(
+    sources: list[str] | None = None,
+    ecartees: dict[str, str] | None = None,
+    perimetre: str = "",
+) -> Releve:
+    """Installe un relevé neuf pour la collecte qui commence, et le retourne.
+
+    ``ecartees`` : sources retirées volontairement du périmètre, et pourquoi —
+    nommées en tête du bilan (cf. ``Releve.messages_ecartees``).
+    """
     global _actif
     with _verrou_actif:
-        _actif = Releve(sources)
+        _actif = Releve(sources, ecartees=ecartees, perimetre=perimetre)
         return _actif
 
 
@@ -343,6 +370,8 @@ def journaliser(releve: Releve | None = None) -> None:
     releve = releve if releve is not None else _actif
     if releve is None:
         return
+    for message in releve.messages_ecartees():
+        logger.info("%s", message)
     for ligne in releve.triees():
         a_detailler = bool(ligne.rejets or ligne.perdues_normalisation)
         logger.info(
@@ -362,7 +391,10 @@ def rendre_tableau(releve: Releve | None = None) -> str:
     releve = releve if releve is not None else _actif
     if releve is None:
         return ""
-    lignes = [
+    # Les sources écartées en TÊTE : c'est la première chose à savoir pour lire
+    # le tableau — ce qui n'y figure pas n'a pas été oublié.
+    ecartees = releve.messages_ecartees()
+    lignes = ecartees + ([""] if ecartees else []) + [
         f"{'source':16}{'brut':>7}{'normal.':>9}{'gardées':>9}{'dédup':>7}"
         f"{'retenues':>10}   détail",
         "─" * 92,

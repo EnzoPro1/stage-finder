@@ -1,4 +1,4 @@
-"""Provenance des offres : familles de requêtes, composition par source, rotation.
+"""Provenance des offres : familles de requêtes, et requête composée par source.
 
 Aucun appel réseau : `requests.get` et `scrape_jobs` sont remplacés par des
 doublures qui répondent selon la requête reçue, ce qui permet de vérifier à la
@@ -6,9 +6,6 @@ fois CE QUI est demandé à chaque moteur et CE QUI est étiqueté au retour.
 """
 
 from __future__ import annotations
-
-import json
-import logging
 
 import pandas as pd
 import pytest
@@ -116,13 +113,6 @@ def test_chaque_famille_du_depot_garde_des_mots_pour_adzuna():
         assert recherche.mots_isoles(famille.termes(), config.ADZUNA_MOTS_IGNORES), nom
 
 
-def test_les_tranches_couvrent_tous_les_termes_une_fois():
-    termes = recherche.lire(recherche.CHEMIN_RECHERCHE).termes()
-    lots = recherche.tranches(termes, 2)
-    assert sorted(t.terme for lot in lots for t in lot) == sorted(t.terme for t in termes)
-    assert abs(len(lots[0]) - len(lots[1])) <= 1
-
-
 # ---------------------------------------------------------------------------
 # Adzuna
 # ---------------------------------------------------------------------------
@@ -180,18 +170,15 @@ def test_careerjet_une_requete_ou_par_famille(petite_recherche, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# France Travail : un appel par terme, rotation
+# France Travail : un appel par terme (hors mode stage, adaptateur conservé)
 # ---------------------------------------------------------------------------
-@pytest.fixture
-def france_travail(petite_recherche, monkeypatch, tmp_path):
+def test_france_travail_un_appel_par_terme_distinct(petite_recherche, monkeypatch):
     from sources import france_travail as ft
 
     monkeypatch.setenv("FRANCE_TRAVAIL_ID", "x")
     monkeypatch.setenv("FRANCE_TRAVAIL_KEY", "y")
     monkeypatch.setattr(ft, "obtenir_jeton", lambda scope=None: "jeton")
     monkeypatch.setattr(ft, "_respecter_debit", lambda: None)
-    monkeypatch.setattr(config, "CHEMIN_ROTATION", tmp_path / ".rotation.json")
-    monkeypatch.setattr(config, "FRANCE_TRAVAIL_TRANCHES", 2)
     demandes = []
 
     def faux_get(url, params, headers, timeout):
@@ -199,64 +186,19 @@ def france_travail(petite_recherche, monkeypatch, tmp_path):
         return _Reponse({"resultats": [{"id": "ft-" + params["motsCles"]}]})
 
     monkeypatch.setattr(ft.requests, "get", faux_get)
-    return ft, demandes
-
-
-def test_france_travail_alterne_les_tranches_et_couvre_tous_les_termes(france_travail):
-    ft, demandes = france_travail
-    ft.recuperer_offres()
-    premiere = [p["motsCles"] for p in demandes]
-    demandes.clear()
-    ft.recuperer_offres()
-    seconde = [p["motsCles"] for p in demandes]
-
-    # Termes distincts : machine learning, NLP, LLM, MLOps, cybersécurité,
-    # sécurité de l'IA — à tour de rôle dans deux tranches.
-    assert premiere == ["machine learning", "LLM", "cybersécurité"]
-    assert seconde == ["NLP", "MLOps", "sécurité de IA"]
-    assert all(p["range"] == f"0-{config.FRANCE_TRAVAIL_RESULTATS - 1}" for p in demandes)
-
-
-def test_france_travail_etiquette_un_terme_partage_des_deux_familles(france_travail):
-    ft, _ = france_travail
     offres = {o["id"]: provenance.familles_de(o) for o in ft.recuperer_offres()}
+
+    # « LLM » est écrit deux fois (ml, mlops) : interrogé UNE fois, deux familles.
+    assert [p["motsCles"] for p in demandes] == [
+        "machine learning", "NLP", "LLM", "MLOps", "cybersécurité", "sécurité de IA"]
+    assert all(p["range"] == f"0-{config.FRANCE_TRAVAIL_RESULTATS - 1}" for p in demandes)
     assert offres["ft-LLM"] == ["ml", "mlops"]
     assert offres["ft-machine learning"] == ["ml"]
 
 
-def test_rotation_reprend_la_tranche_la_plus_ancienne(france_travail):
-    ft, demandes = france_travail
-    config.CHEMIN_ROTATION.write_text(json.dumps(
-        {"tranches": 2, "passages": {"0": "2026-09-01", "1": "2026-08-01"}}), encoding="utf-8")
-    ft.recuperer_offres()
-    assert demandes[0]["motsCles"] == "NLP"
-
-
-def test_rotation_perimee_si_le_nombre_de_tranches_change(tmp_path):
-    from sources import france_travail as ft
-
-    chemin = tmp_path / "r.json"
-    ft.ecrire_rotation(chemin, 3, {0: "2026-09-01"})
-    assert ft.lire_rotation(chemin, 2) == {}
-    assert ft.lire_rotation(chemin, 3) == {0: "2026-09-01"}
-
-
-def test_rotation_illisible_repart_de_zero(tmp_path):
-    from sources import france_travail as ft
-
-    chemin = tmp_path / "r.json"
-    chemin.write_text("{pas du json", encoding="utf-8")
-    assert ft.lire_rotation(chemin, 2) == {}
-    assert ft.choisir_tranche(2, {}) == 0
-
-
-def test_rotation_signale_une_tranche_sortie_de_la_fenetre(france_travail, caplog):
-    ft, _ = france_travail
-    config.CHEMIN_ROTATION.write_text(json.dumps(
-        {"tranches": 2, "passages": {"0": "2020-01-01", "1": "2030-01-01"}}), encoding="utf-8")
-    with caplog.at_level(logging.WARNING):
-        ft.recuperer_offres()
-    assert "n'avait pas été interrogée depuis" in caplog.text
+def test_france_travail_hors_des_sources_actives_pour_les_stages():
+    assert "france_travail" not in config.SOURCES_ACTIVES
+    assert "france_travail" in config.SOURCES_ECARTEES_STAGES
 
 
 def test_mots_cles_france_travail_retire_la_ponctuation():

@@ -78,11 +78,33 @@ RESULTATS_PAR_TERME = 30
 # l'adaptateur convertissait en `[]` muet (corrigé depuis : `observabilite`).
 SOURCES_ACTIVES = [
     "adzuna",
-    "france_travail",
     "careerjet",
     "free_work",
     "jobspy",
 ]
+
+# Sources du catalogue VOLONTAIREMENT absentes de `SOURCES_ACTIVES` pour les
+# stages, avec la raison. Le bilan de chaque run les imprime en tête : une
+# source retirée ne doit pas ressembler à une source oubliée, ni une source
+# oubliée à une source retirée. `config_schema` refuse qu'une source figure à
+# la fois ici et dans `SOURCES_ACTIVES`.
+#
+# FRANCE TRAVAIL : 319 offres brutes, 0 stage gardé (contrôle en réel du
+# 2026-09-17, requêtes par terme sur les familles de recherche.yaml). Conforme
+# au diagnostic du 2026-09-05 (SPEC_sources_muettes.md) : le gisement ne porte
+# presque pas de stages — aucune nature de contrat « stage », et les rares
+# stages y sont déclarés en CDD. L'adaptateur reste au catalogue : il est
+# central pour les jobs étudiants.
+SOURCES_ECARTEES_STAGES = {
+    "france_travail": (
+        "0 stage gardé sur 319 offres (2026-09-17) — le gisement ne publie "
+        "presque pas de stages ; conservée pour les jobs étudiants"
+    ),
+    "jooble": (
+        "« Paris » résolu en Paris, Texas : 86 offres américaines sur 86 "
+        "(2026-09-05)"
+    ),
+}
 
 # --- Adzuna : construction de la requête ------------------------------------
 # Le paramètre `what` d'Adzuna est CONJONCTIF : il exige TOUS les mots.
@@ -118,6 +140,15 @@ ADZUNA_MOTS_IGNORES = [
     "research", "applied", "computer", "plateforme", "platform",
     "infrastructure", "optimisation", "optimization", "model", "sécurité",
     "security",
+    # « agents » n'est interrogé qu'en phrase (« agents IA », « AI agents »).
+    # Adzuna ne sait pas faire de phrase : une fois « ia » / « ai » retirés, le
+    # mot seul attrapait toute description qui parle d'« agents ». Mesuré le
+    # 2026-09-17 : 121 -> 112 stages gardés, ai_engineering 61 -> 51 ; les 9
+    # offres perdues n'étaient trouvées QUE par « agents » (contrôle de gestion,
+    # marketing, juriste, front office…). Une seule citait l'IA dans son titre
+    # (« Marketing Digital & Automatisation IA ») : Adzuna ne peut pas interroger
+    # « IA », retiré pour les raisons ci-dessus.
+    "agents",
 ]
 
 # Pages Adzuna par chaîne (famille × mot de contrat), RESULTATS_PAR_TERME
@@ -136,36 +167,20 @@ CAREERJET_LOCALE = "fr_FR"
 # Free-Work : nombre de pages de stages parcourues (le site en publie peu).
 FREE_WORK_PAGES = 2
 
-# --- France Travail : un appel par terme, en rotation ------------------------
+# --- France Travail : un appel par terme -------------------------------------
 # `motsCles` est CONJONCTIF, virgule comme espace (sondé le 2026-09-17 :
-# vendeur 1 750, caissier 218, « vendeur,caissier » 8). Pas de OU possible :
-# un appel par terme distinct de recherche.yaml — 40 aujourd'hui.
+# vendeur 1 750, caissier 218, « vendeur,caissier » 8). Pas de OU possible.
+# Hors `SOURCES_ACTIVES` pour les stages (cf. SOURCES_ECARTEES_STAGES).
 #
-# Nombre d'offres rapatriées par terme (plafond de l'API : 150 par appel).
+# Nombre d'offres rapatriées par appel (plafond de l'API : 150).
 FRANCE_TRAVAIL_RESULTATS = 150
 
-# ROTATION. Les termes sont répartis en N tranches, et chaque run n'interroge
-# que la tranche la moins récemment interrogée. Le décompte qui la motive :
+# Décompte d'appels par run, stages :
 #
 #   avant (5 termes globaux)   adzuna ≤4, france_travail 5, careerjet ≤10,
 #                              free_work ≤2, jobspy 15 ............. ≈ 36
-#   familles, sans rotation    adzuna ≤20, france_travail 40, careerjet ≤10,
-#                              free_work ≤2, jobspy 15 ............. ≈ 87
-#   familles, 2 tranches       france_travail 20 ................... ≈ 67
-#
-# 87 dépasse le double de 36 ; 2 tranches le ramènent sous ce double. France
-# Travail est la seule source concernée : c'est la seule sans OU.
-#
-# LE PRIX : un terme n'est interrogé qu'un run sur N. Sans perte tant que deux
-# runs consécutifs sont espacés de moins de JOURS_FRAICHEUR / N jours (3,5 j
-# à N = 2) — au-delà, une offre peut sortir de la fenêtre avant que sa
-# tranche repasse. Le module le signale dans les logs quand ça arrive.
-# 1 = pas de rotation.
-FRANCE_TRAVAIL_TRANCHES = 2
-
-# État de la rotation : date du dernier passage de chaque tranche. Artefact de
-# run, non versionné ; absent ou illisible = toutes les tranches à refaire.
-CHEMIN_ROTATION = Path(".rotation.json")
+#   familles                   adzuna ≤20, careerjet ≤10, free_work ≤2,
+#                              jobspy 15 ........................... ≈ 47
 
 # --- JobSpy : une requête par famille, en OU --------------------------------
 # Indeed et LinkedIn comprennent OU, guillemets et parenthèses (documenté par

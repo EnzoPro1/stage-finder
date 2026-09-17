@@ -51,7 +51,19 @@ def test_france_travail_au_dela_du_plafond_api_rejete(monkeypatch):
         valider_config()
 
 
-def test_zero_tranche_rejetee(monkeypatch):
-    monkeypatch.setattr(config, "FRANCE_TRAVAIL_TRANCHES", 0)
+def test_source_active_et_ecartee_rejetee(monkeypatch):
+    monkeypatch.setattr(config, "SOURCES_ECARTEES_STAGES", {"adzuna": "raison"})
+    with pytest.raises(ValidationError):
+        valider_config()
+
+
+def test_source_ecartee_inconnue_rejetee(monkeypatch):
+    monkeypatch.setattr(config, "SOURCES_ECARTEES_STAGES", {"monster": "raison"})
+    with pytest.raises(ValidationError):
+        valider_config()
+
+
+def test_source_ecartee_sans_raison_rejetee(monkeypatch):
+    monkeypatch.setattr(config, "SOURCES_ECARTEES_STAGES", {"jooble": "  "})
     with pytest.raises(ValidationError):
         valider_config()

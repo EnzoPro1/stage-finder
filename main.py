@@ -102,7 +102,8 @@ def collecter(utiliser_jobspy: bool) -> list[Offre]:
     # Relevé posé AVANT le premier appel et amorcé avec les sources attendues :
     # une source qui échoue dès l'import doit apparaître en panne dans le
     # tableau, pas en être absente.
-    observabilite.demarrer([s.nom for s in actives])
+    observabilite.demarrer([s.nom for s in actives],
+                           ecartees=config.SOURCES_ECARTEES_STAGES, perimetre="stages")
 
     api = [s for s in actives if not s.sequentiel]
     scraping = [s for s in actives if s.sequentiel]
