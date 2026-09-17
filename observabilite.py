@@ -177,6 +177,10 @@ class Releve:
         # s'écrivent pareil, par leur absence.
         self.ecartees: dict[str, str] = dict(ecartees or {})
         self.perimetre = perimetre
+        # Recommandations d'une source sur son propre réglage (« LinkedIn a
+        # bloqué : abaisse le plafond »). Une par ligne au plus. Le relevé les
+        # affiche en tête ; il ne décide rien, et rien ne s'ajuste tout seul.
+        self.conseils: dict[str, str] = {}
         # Les sources attendues sont créées D'AVANCE : une source qui échoue à
         # l'import ne poserait jamais sa ligne, et disparaîtrait du tableau au
         # lieu d'y apparaître en panne — exactement le silence qu'on corrige.
@@ -198,6 +202,11 @@ class Releve:
             self._ligne(source).incidents.append(
                 Incident(source, categorie, str(detail)[:200])
             )
+
+    def conseiller(self, source: str, message: str) -> None:
+        """Pose (ou remplace) la recommandation d'une ligne pour ce run."""
+        with self._verrou:
+            self.conseils[source] = message
 
     def compter_brut(self, source: str, n: int) -> None:
         with self._verrou:
@@ -295,6 +304,7 @@ class Releve:
         return {
             "perimetre": self.perimetre,
             "ecartees": dict(self.ecartees),
+            "conseils": dict(self.conseils),
             "sources": [
                 {
                     "nom": l.nom, "brut": l.brut, "normalisees": l.normalisees,
@@ -380,6 +390,13 @@ def signaler(source: str, categorie: str, detail: str) -> None:
         releve.signaler(source, categorie, detail)
 
 
+def conseiller(source: str, message: str) -> None:
+    """Recommandation d'une source sur son réglage, sur le relevé actif s'il existe."""
+    releve = _actif
+    if releve is not None:
+        releve.conseiller(source, message)
+
+
 def signaler_fusion(source: str) -> None:
     """Une offre supprimee par la deduplication, sur le releve actif s'il existe.
 
@@ -426,6 +443,8 @@ def journaliser(releve: Releve | None = None) -> None:
         return
     for message in releve.messages_ecartees():
         logger.info("%s", message)
+    for message in releve.conseils.values():
+        logger.warning("%s", message)
     for famille in releve.familles_triees():
         logger.info("Famille %-15s brut %4d -> gardées %4d",
                     famille.nom, famille.brut, famille.survivantes)
@@ -450,8 +469,8 @@ def rendre_tableau(releve: Releve | None = None) -> str:
         return ""
     # Les sources écartées en TÊTE : c'est la première chose à savoir pour lire
     # le tableau — ce qui n'y figure pas n'a pas été oublié.
-    ecartees = releve.messages_ecartees()
-    lignes = ecartees + ([""] if ecartees else []) + [
+    tete = releve.messages_ecartees() + [f"⚠ {m}" for m in releve.conseils.values()]
+    lignes = tete + ([""] if tete else []) + [
         f"{'source':16}{'brut':>7}{'normal.':>9}{'gardées':>9}{'dédup':>7}"
         f"{'retenues':>10}   détail",
         "─" * 92,

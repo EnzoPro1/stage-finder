@@ -203,22 +203,36 @@ FRANCE_TRAVAIL_RESULTATS = 150
 JOBSPY_SITES = ["indeed", "linkedin"]
 
 # Indeed et LinkedIn comprennent OU, guillemets et parenthèses (documenté par
-# JobSpy) : 3 sites × 5 familles = 15 appels, autant qu'avant avec 5 termes.
-# Une requête de famille ramène davantage qu'une requête de terme, d'où un
-# plafond par SITE : Indeed pagine sans se braquer, LinkedIn bloque vers la
-# 10e page par IP et va chercher la description de CHAQUE offre (un appel de
-# plus par résultat) — il reste donc au plafond d'avant.
+# JobSpy) : 2 sites × 5 familles = 10 appels. Une requête de famille ramène
+# davantage qu'une requête de terme, d'où un plafond par SITE.
 #
-# Contrôle en réel du 2026-09-17 (lignes rendues, puis gardées par les filtres) :
+# Contrôle en réel du 2026-09-17 aux plafonds PRÉCÉDENTS (indeed 100,
+# linkedin 30) — lignes rendues / gardées par les filtres :
 #
 #   indeed    ai_engineering 100 / 55   ml 100 / 68   mlops 24 / 5
 #             inference 27 / 10         cyber 100 / 35          ~1 s par requête
 #   linkedin  30 / 14 à 20 pour chaque famille                  ~35-40 s par requête
 #
-# Aucun blocage ni statut d'erreur journalisé par JobSpy. LES PLAFONDS SONT
-# ATTEINTS : Indeed sur 3 familles sur 5, LinkedIn sur les 5 — la collecte y
-# est tronquée par ce réglage, pas par le marché.
-JOBSPY_RESULTATS_PAR_SITE = {"indeed": 100, "linkedin": 30}
+# Aucun blocage ni statut d'erreur. Les plafonds étaient ATTEINTS (Indeed 3
+# familles sur 5, LinkedIn 5 sur 5) : la collecte était tronquée par ce
+# réglage, pas par le marché. Relevés à 300 / 60 :
+#
+#   indeed 300   ~1 s par requête et aucun refus à 100 : marge large.
+#   linkedin 60  chaque résultat coûte un appel de plus (description) et
+#                LinkedIn bloque vers la 10e page par IP. Si un run enregistre
+#                un 429, le bilan le dit en tête et propose d'abaisser ce
+#                plafond — sans l'ajuster tout seul.
+#
+# Contrôle en réel du 2026-09-17 à 300 / 60 — lignes / gardées :
+#
+#   indeed    ai_engineering 246 / 121  ml 226 / 121  mlops 24 / 5
+#             inference 27 / 10         cyber 300 / 72          1 à 4 s par requête
+#   linkedin  60 / 31 à 39 pour chaque famille                  ~80 s par requête
+#
+# Aucun blocage, aucun statut d'erreur, aucun conseil émis. JobSpy complet :
+# 455 s, pauses comprises (contre ~240 s à 100 / 30). Plafond encore atteint :
+# Indeed sur cyber (300), LinkedIn sur les 5 familles (60).
+JOBSPY_RESULTATS_PAR_SITE = {"indeed": 300, "linkedin": 60}
 
 # ---------------------------------------------------------------------------
 # 2 ter) Métiers suivis par le tableau de bord marché (market.py)

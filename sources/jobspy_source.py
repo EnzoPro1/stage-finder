@@ -70,18 +70,36 @@ def ligne(site: str) -> str:
     return f"{NOM_SOURCE}:{site}"
 
 
+def analyser_message(message: str, niveau: int) -> tuple[str, bool] | None:
+    """(catégorie d'incident, blocage ?) si un message de JobSpy signale un refus, sinon None.
+
+    Reconnu : tout message ERROR (LinkedIn journalise ses refus ainsi), et tout
+    message qui cite un « status code » (Indeed le fait en INFO). Un blocage
+    est un 429 ou un « Blocked » explicite. Les formulations sont celles de
+    python-jobspy 1.1.82, épinglé dans requirements.txt ; des échantillons
+    enregistrés (tests/fixtures/jobspy_messages.json) cassent les tests si
+    une montée de version les change.
+    """
+    bas = message.lower()
+    if niveau < logging.ERROR and "status code" not in bas:
+        return None
+    blocage = "429" in message or "blocked" in bas
+    categorie = "http" if blocage or _MOTIF_CODE_HTTP.search(message) else "reseau"
+    return categorie, blocage
+
+
 class _Temoin(logging.Handler):
     """Recueille ce que JobSpy dit d'un refus sans le lever."""
 
     def __init__(self) -> None:
         super().__init__(logging.INFO)
-        self.messages: list[str] = []
+        self.refus: list[tuple[str, str, bool]] = []   # (message, catégorie, blocage)
 
     def emit(self, record: logging.LogRecord) -> None:
         message = record.getMessage()
-        if record.levelno >= logging.ERROR or "status code" in message.lower():
-            if message not in self.messages:
-                self.messages.append(message)
+        analyse = analyser_message(message, record.levelno)
+        if analyse and all(message != m for m, _, _ in self.refus):
+            self.refus.append((message, *analyse))
 
 
 def _consoles_jobspy_au_niveau_erreur() -> None:
@@ -126,11 +144,17 @@ def _scraper(site: str, requete: str, libelle: str) -> list[dict]:
     finally:
         journal.removeHandler(temoin)
 
-    for message in temoin.messages:
-        categorie = ("http" if _MOTIF_CODE_HTTP.search(message) or "blocked" in message.lower()
-                     else "reseau")
+    for message, categorie, blocage in temoin.refus:
         observabilite.signaler(ligne(site), categorie, f"{message[:120]} sur « {libelle} »")
         logger.warning("JobSpy[%s] : %s (« %s »)", site, message, libelle)
+        if blocage:
+            plafond = config.JOBSPY_RESULTATS_PAR_SITE.get(site, config.RESULTATS_PAR_TERME)
+            observabilite.conseiller(
+                ligne(site),
+                f"« {ligne(site)} » a été BLOQUÉ (429) pendant ce run, résultats partiels. "
+                f"Plafond actuel : {plafond} résultats par requête — envisage de l'abaisser "
+                f"(config.JOBSPY_RESULTATS_PAR_SITE[\"{site}\"]). Rien n'est ajusté automatiquement.",
+            )
 
     if df is None or df.empty:
         logger.info("JobSpy[%s] : 0 offre pour « %s »", site, libelle)

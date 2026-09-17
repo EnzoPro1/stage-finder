@@ -1,0 +1,51 @@
+{
+  "_origine": "Messages de journal de python-jobspy 1.1.82, relevés dans jobspy/linkedin/__init__.py et jobspy/indeed/__init__.py. Le témoin de sources/jobspy_source.py doit les reconnaître ; tests/test_jobspy_messages.py casse si la bibliothèque change leur formulation.",
+  "version": "1.1.82",
+  "refus": [
+    {
+      "nom": "linkedin_blocage",
+      "journal": "JobSpy:LinkedIn",
+      "niveau": "ERROR",
+      "message": "429 Response - Blocked by LinkedIn for too many requests",
+      "gabarit_source": "429 Response - Blocked by LinkedIn for too many requests",
+      "fichier_source": "linkedin/__init__.py",
+      "categorie": "http",
+      "blocage": true
+    },
+    {
+      "nom": "linkedin_statut",
+      "journal": "JobSpy:LinkedIn",
+      "niveau": "ERROR",
+      "message": "LinkedIn response status code 403 - <!DOCTYPE html><html><body>Forbidden</body></html>",
+      "gabarit_source": "LinkedIn response status code {response.status_code}",
+      "fichier_source": "linkedin/__init__.py",
+      "categorie": "http",
+      "blocage": false
+    },
+    {
+      "nom": "indeed_statut",
+      "journal": "JobSpy:Indeed",
+      "niveau": "INFO",
+      "message": "responded with status code: 403 (submit GitHub issue if this appears to be a bug)",
+      "gabarit_source": "responded with status code: {response.status_code} (submit GitHub issue if this appears to be a bug)",
+      "fichier_source": "indeed/__init__.py",
+      "categorie": "http",
+      "blocage": false
+    },
+    {
+      "nom": "indeed_trop_de_requetes",
+      "journal": "JobSpy:Indeed",
+      "niveau": "INFO",
+      "message": "responded with status code: 429 (submit GitHub issue if this appears to be a bug)",
+      "gabarit_source": "responded with status code: {response.status_code} (submit GitHub issue if this appears to be a bug)",
+      "fichier_source": "indeed/__init__.py",
+      "categorie": "http",
+      "blocage": true
+    }
+  ],
+  "ordinaires": [
+    {"journal": "JobSpy:Indeed", "niveau": "INFO", "message": "search page: 1 / 3"},
+    {"journal": "JobSpy:LinkedIn", "niveau": "INFO", "message": "search page: 2 / 2"},
+    {"journal": "JobSpy:Indeed", "niveau": "INFO", "message": "found no jobs on page: 2"}
+  ]
+}
