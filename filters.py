@@ -41,6 +41,7 @@ def _motif_mots(mots: list[str]) -> re.Pattern:
 
 
 _MOTIF_STAGE = _motif_mots(config.MOTS_CLES_STAGE)
+_MOTIF_ALTERNANCE = _motif_mots(config.MOTS_CLES_ALTERNANCE)
 _MOTIF_EXCLU = _motif_mots(config.MOTS_CLES_EXCLUS)
 _MOTIF_ETRANGER_TITRE = _motif_mots(config.MARQUEURS_ETRANGERS_TITRE)
 
@@ -155,3 +156,38 @@ def filtrer(offres: list[Offre]) -> list[Offre]:
         rejets["hors-stage"], rejets["exclu"], rejets["hors-IDF"], rejets["trop-vieux"],
     )
     return gardees
+
+
+def filtrer_jobs_etudiants(offres: list[Offre]) -> list[Offre]:
+    """Filtres des JOBS ÉTUDIANTS : la fraîcheur, et rien d'autre.
+
+    Aucun des filtres de stage ne s'applique : ni « stage » dans le titre, ni
+    exclusion alternance/sénior, ni Île-de-France — le tri géographique se
+    fera sur le temps de trajet depuis les origines, jamais sur un département.
+
+    Une alternance n'est pas un job étudiant, mais elle n'est pas JETÉE : elle
+    reçoit le drapeau « alternance » (mot de `config.MOTS_CLES_ALTERNANCE`
+    dans le titre), et la revue manuelle tranche.
+    """
+    gardees: list[Offre] = []
+    trop_vieilles = 0
+    releve = observabilite.actif()
+    for offre in offres:
+        if not est_recente(offre):
+            trop_vieilles += 1
+            if releve is not None:
+                releve.compter_rejet(offre.source, "trop-vieux")
+            continue
+        if _MOTIF_ALTERNANCE.search(offre.title) and "alternance" not in offre.drapeaux:
+            offre.drapeaux.append("alternance")
+        if releve is not None:
+            releve.compter_survivante(offre.source, offre.familles)
+        gardees.append(offre)
+    logger.info(
+        "Filtres jobs étudiants : %d gardée(s), %d trop vieille(s) (+%dj), "
+        "%d signalée(s) alternance.",
+        len(gardees), trop_vieilles, config.JOURS_FRAICHEUR,
+        sum("alternance" in o.drapeaux for o in gardees),
+    )
+    return gardees
+

@@ -23,6 +23,7 @@ import argparse
 import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 import console  # noqa: F401 - force UTF-8 sur la console Windows (badge ★, emoji)
 import config
@@ -58,18 +59,46 @@ def _configurer_logs() -> None:
         logging.getLogger(bruyant).setLevel(logging.WARNING)
 
 
-def lignes_du_bilan(source: registry.Source) -> list[str]:
+@dataclass(frozen=True)
+class Perimetre:
+    """Ce qu'une collecte interroge : stages ou jobs étudiants."""
+
+    nom: str                      # libellé du bilan : « stages », « jobs étudiants »
+    sources: tuple[str, ...]
+    ecartees: dict
+    point_entree: str             # fonction appelée dans le module de chaque source
+    sites_jobspy: tuple[str, ...]
+    familles: tuple[str, ...]     # familles (ou étiquettes) amorcées dans le bilan
+
+
+def perimetre_stages() -> Perimetre:
+    """Lu à l'appel, pas à l'import : un test qui modifie `config` est pris en compte."""
+    return Perimetre("stages", tuple(config.SOURCES_ACTIVES), config.SOURCES_ECARTEES_STAGES,
+                     "recuperer_offres", tuple(config.JOBSPY_SITES),
+                     tuple(recherche.charger().noms_familles()))
+
+
+def perimetre_jobs() -> Perimetre:
+    jobs = recherche.charger().student_jobs
+    etiquettes = tuple(jobs.familles()) + (recherche.ETIQUETTE_SANS_MOT_CLE,) if jobs else ()
+    return Perimetre("jobs étudiants", tuple(config.SOURCES_ACTIVES_JOBS),
+                     config.SOURCES_ECARTEES_JOBS, "recuperer_jobs_etudiants",
+                     tuple(config.JOBSPY_SITES_JOBS), etiquettes)
+
+
+def lignes_du_bilan(source: registry.Source, perimetre: Perimetre | None = None) -> list[str]:
     """Les lignes qu'une source occupe dans le bilan : une par site pour JobSpy.
 
     Elles sont amorcées AVANT la collecte, pour qu'un site qui ne rend rien
     apparaisse à 0 — donc MUET — au lieu de ne pas apparaître du tout.
     """
     if source.nom == "jobspy":
-        return [f"jobspy:{site}" for site in config.JOBSPY_SITES]
+        sites = perimetre.sites_jobspy if perimetre else config.JOBSPY_SITES
+        return [f"jobspy:{site}" for site in sites]
     return [source.nom]
 
 
-def _collecter_source(source: registry.Source) -> list[Offre]:
+def _collecter_source(source: registry.Source, perimetre: Perimetre | None = None) -> list[Offre]:
     """Interroge UNE source et renvoie ses offres normalisées.
 
     Toute erreur est absorbée ici — Y COMPRIS l'import du module de la source,
@@ -81,9 +110,13 @@ def _collecter_source(source: registry.Source) -> list[Offre]:
     une source qui rend [] parce que le marché est vide s'écrivaient pareil.
     """
     try:
-        brutes = source.recuperer()()
+        if perimetre is None or perimetre.point_entree == "recuperer_offres":
+            recuperer = source.recuperer()
+        else:
+            recuperer = source.recuperer(perimetre.point_entree)
+        brutes = recuperer()
     except Exception as err:  # noqa: BLE001 - une source ne doit jamais tout casser
-        for ligne in lignes_du_bilan(source):
+        for ligne in lignes_du_bilan(source, perimetre):
             observabilite.signaler(ligne, "import", f"{type(err).__name__}: {err}")
         logger.warning("Source « %s » en échec complet : %s", source.nom, err)
         return []
@@ -98,10 +131,10 @@ def _collecter_source(source: registry.Source) -> list[Offre]:
     return offres
 
 
-def collecter(utiliser_jobspy: bool) -> list[Offre]:
+def collecter(utiliser_jobspy: bool, perimetre: Perimetre | None = None) -> list[Offre]:
     """
-    Interroge les sources de ``config.SOURCES_ACTIVES`` et renvoie les offres
-    normalisées.
+    Interroge les sources du périmètre (stages par défaut : ``config.SOURCES_ACTIVES``)
+    et renvoie les offres normalisées.
 
     Les sources API (Adzuna, Jooble, France Travail, Careerjet, Free-Work) sont
     interrogées EN PARALLÈLE dans un pool de threads : la collecte est quasi
@@ -112,7 +145,8 @@ def collecter(utiliser_jobspy: bool) -> list[Offre]:
     La liste des sources vient du catalogue (``sources/registry.py``) : ajouter
     un site ne demande plus de toucher à cet orchestrateur.
     """
-    actives = registry.sources_actives(config.SOURCES_ACTIVES)
+    perimetre = perimetre or perimetre_stages()
+    actives = registry.sources_actives(list(perimetre.sources))
     if not utiliser_jobspy:
         # --no-jobspy / mode « rapide » : on saute tout ce qui scrape.
         actives = [s for s in actives if not s.sequentiel]
@@ -120,9 +154,9 @@ def collecter(utiliser_jobspy: bool) -> list[Offre]:
     # Relevé posé AVANT le premier appel et amorcé avec les sources attendues :
     # une source qui échoue dès l'import doit apparaître en panne dans le
     # tableau, pas en être absente.
-    observabilite.demarrer([ligne for s in actives for ligne in lignes_du_bilan(s)],
-                           ecartees=config.SOURCES_ECARTEES_STAGES, perimetre="stages",
-                           familles=recherche.charger().noms_familles())
+    observabilite.demarrer([ligne for s in actives for ligne in lignes_du_bilan(s, perimetre)],
+                           ecartees=perimetre.ecartees, perimetre=perimetre.nom,
+                           familles=list(perimetre.familles))
 
     api = [s for s in actives if not s.sequentiel]
     scraping = [s for s in actives if s.sequentiel]
@@ -134,12 +168,12 @@ def collecter(utiliser_jobspy: bool) -> list[Offre]:
     toutes: list[Offre] = []
     if api:
         with ThreadPoolExecutor(max_workers=config.MAX_THREADS_COLLECTE) as executor:
-            futures = [executor.submit(_collecter_source, s) for s in api]
+            futures = [executor.submit(_collecter_source, s, perimetre) for s in api]
             for future in as_completed(futures):
                 toutes.extend(future.result())
 
     for source in scraping:
-        toutes.extend(_collecter_source(source))
+        toutes.extend(_collecter_source(source, perimetre))
 
     logger.info("Collecte totale : %d offre(s) normalisée(s).", len(toutes))
     return toutes
@@ -333,6 +367,12 @@ def executer(args: argparse.Namespace) -> None:
     # 0) Garde-fou : la config est-elle cohérente ? (fail-fast si non)
     valider_config()
 
+    if args.jobs_etudiants:
+        import jobs_etudiants
+        jobs_etudiants.executer(utiliser_jobspy=not args.no_jobspy,
+                                chemin_base=None if args.no_db else config.CHEMIN_BASE_JOBS)
+        return
+
     # 1-6) Collecte -> ... -> Ranking cosinus (sans IA)
     classees = collecter_et_classer(utiliser_jobspy=not args.no_jobspy)
 
@@ -391,6 +431,8 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Agrégateur de stages classés par pertinence sémantique.")
     p.add_argument("--limit", type=int, default=None, help="Nombre d'offres affichées dans la console.")
     p.add_argument("--no-jobspy", action="store_true", help="Ne pas scraper via JobSpy (plus rapide).")
+    p.add_argument("--jobs-etudiants", action="store_true",
+                   help="Collecte des JOBS ÉTUDIANTS autour des origines (base séparée).")
     p.add_argument("--min-score", type=float, default=None, help="Seuil minimal de similarité (0-1).")
     p.add_argument("--new-only", action="store_true", help="N'afficher que les offres jamais vues (SQLite).")
     p.add_argument("--db", default=config.CHEMIN_BASE, help="Chemin de la base SQLite.")

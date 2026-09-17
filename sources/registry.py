@@ -33,9 +33,14 @@ class Source:
     sequentiel: bool = False   # True = scraping, à interroger sans parallélisme
     cle_requise: str = ""      # variable .env attendue ("" = aucune clé)
 
-    def recuperer(self) -> Callable[[], list[dict]]:
-        """Importe le module de la source et retourne son ``recuperer_offres``."""
-        return getattr(import_module(self.module), "recuperer_offres")
+    def recuperer(self, point_entree: str = "recuperer_offres") -> Callable[[], list[dict]]:
+        """Importe le module de la source et retourne son point d'entrée.
+
+        ``recuperer_offres`` pour les stages, ``recuperer_jobs_etudiants`` pour
+        les jobs étudiants. Une source sans ce point d'entrée lève
+        ``AttributeError``, que le collecteur trace comme une panne d'import.
+        """
+        return getattr(import_module(self.module), point_entree)
 
 
 # Une source = une ligne. L'ordre n'a pas d'importance (la collecte est parallèle).

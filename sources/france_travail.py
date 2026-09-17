@@ -155,7 +155,7 @@ def mots_cles(terme: str) -> str:
 
 
 def _chercher_un_terme(token: str, terme: str) -> list[dict]:
-    """Interroge France Travail pour un seul terme de recherche."""
+    """Interroge France Travail pour un seul terme de recherche, en Île-de-France."""
     params = {
         "motsCles": mots_cles(terme),
         "region": _REGION_IDF,
@@ -163,6 +163,19 @@ def _chercher_un_terme(token: str, terme: str) -> list[dict]:
         "publieeDepuis": min(config.JOURS_FRAICHEUR, 31),
         "range": f"0-{max(0, config.FRANCE_TRAVAIL_RESULTATS - 1)}",
     }
+    return _chercher(token, params, terme)[0]
+
+
+def _total_content_range(reponse) -> int | None:
+    """« offres 0-149/617 » -> 617, ou None si l'en-tête manque."""
+    try:
+        return int(reponse.headers.get("Content-Range", "").rsplit("/", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def _chercher(token: str, params: dict, terme: str) -> tuple[list[dict], int | None]:
+    """UNE page de recherche. Rend (offres, total annoncé par l'API ou None)."""
     _respecter_debit()
     try:
         reponse = requests.get(
@@ -175,12 +188,12 @@ def _chercher_un_terme(token: str, terme: str) -> list[dict]:
         categorie, detail = observabilite.categorie_requests(err)
         observabilite.signaler(NOM_SOURCE, categorie, f"{detail} sur « {terme} »")
         logger.warning("France Travail : échec réseau pour « %s » (%s).", terme, type(err).__name__)
-        return []
+        return [], None
 
     # 204 = aucune offre pour ces critères (comportement normal de l'API).
     if reponse.status_code == 204:
         logger.info("France Travail : 0 offre pour « %s ».", terme)
-        return []
+        return [], 0
     if reponse.status_code not in (200, 206):
         # On remonte le MESSAGE de l'API, pas seulement le code : elle explique
         # précisément quel paramètre elle refuse (ex. « Le nombre de départements
@@ -193,23 +206,23 @@ def _chercher_un_terme(token: str, terme: str) -> list[dict]:
             "France Travail : statut %s pour « %s » — %s",
             reponse.status_code, terme, reponse.text[:200].strip() or "(corps vide)",
         )
-        return []
+        return [], None
 
     try:
         donnees = reponse.json()
     except ValueError:
         observabilite.signaler(NOM_SOURCE, "format", f"réponse non-JSON sur « {terme} »")
         logger.warning("France Travail : réponse non-JSON pour « %s ».", terme)
-        return []
+        return [], None
 
     resultats = donnees.get("resultats", [])
     if not isinstance(resultats, list):
         observabilite.signaler(NOM_SOURCE, "format", f"structure inattendue sur « {terme} »")
         logger.warning("France Travail : format inattendu pour « %s ».", terme)
-        return []
+        return [], None
 
     logger.info("France Travail : %d offre(s) pour « %s ».", len(resultats), terme)
-    return resultats
+    return resultats, _total_content_range(reponse)
 
 
 # Code du type de contrat « stage » dans le référentiel France Travail.
@@ -321,6 +334,88 @@ def recuperer_offres() -> list[dict]:
 
     toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("France Travail : %d offre(s) brute(s) au total.", len(toutes))
+    return toutes
+
+
+# ---------------------------------------------------------------------------
+# Jobs étudiants
+# ---------------------------------------------------------------------------
+# Plafond de l'API : `commune` accepte jusqu'à 5 codes par appel.
+_COMMUNES_PAR_APPEL = 5
+
+
+def _toutes_les_pages(token: str, params: dict, libelle: str) -> list[dict]:
+    """Pagine par tranches de FRANCE_TRAVAIL_RESULTATS, jusqu'à FRANCE_TRAVAIL_PAGES_JOBS.
+
+    S'arrête dès qu'une page est incomplète ou que le total annoncé est atteint.
+    Si le plafond de pages coupe la collecte, un CONSEIL le dit en tête du bilan.
+    """
+    taille = config.FRANCE_TRAVAIL_RESULTATS
+    toutes: list[dict] = []
+    total = None
+    for page in range(config.FRANCE_TRAVAIL_PAGES_JOBS):
+        debut = page * taille
+        lot, total_page = _chercher(token, {**params, "range": f"{debut}-{debut + taille - 1}"},
+                                    f"{libelle} p.{page + 1}")
+        total = total_page if total_page is not None else total
+        toutes.extend(lot)
+        if len(lot) < taille or (total is not None and len(toutes) >= total):
+            return toutes
+    if total is not None and total > len(toutes):
+        observabilite.conseiller(
+            NOM_SOURCE,
+            f"« {NOM_SOURCE} » TRONQUÉE sur « {libelle} » : {total} offres annoncées, "
+            f"{len(toutes)} rapatriées (FRANCE_TRAVAIL_PAGES_JOBS = "
+            f"{config.FRANCE_TRAVAIL_PAGES_JOBS} pages de {taille}).",
+        )
+    return toutes
+
+
+def recuperer_jobs_etudiants() -> list[dict]:
+    """Jobs étudiants autour des origines de recherche.yaml.
+
+    - un appel par TERME, sur toutes les origines à la fois (`commune` +
+      `distance`) : `motsCles` est conjonctif, pas de OU possible ;
+    - un appel SANS mot-clé par ORIGINE, filtré sur le temps partiel structuré
+      (`tempsPlein=false`, même compte que `dureeHebdo=2` : 617 offres à
+      30 km de Meaux sur 7 jours, sondé le 2026-09-17). France Travail
+      est la seule source dont ce champ est fiable — Careerjet en rendait 12.
+
+    Pas de filtre de région : le rayon autour des origines borne la zone, et
+    le tri se fera sur le temps de trajet.
+    """
+    client_id, client_secret = _identifiants()
+    if not client_id or not client_secret:
+        observabilite.signaler(NOM_SOURCE, "cle_absente",
+                               "FRANCE_TRAVAIL_ID / FRANCE_TRAVAIL_KEY absents du .env")
+        logger.warning("France Travail ignorée : identifiants absents du .env.")
+        return []
+    token = obtenir_jeton()
+    if not token:
+        observabilite.signaler(NOM_SOURCE, "auth", "jeton OAuth2 indisponible")
+        return []
+
+    jobs = recherche.charger().student_jobs
+    commun = {"distance": jobs.rayon_km, "publieeDepuis": min(config.JOURS_FRAICHEUR, 31)}
+    origines = list(jobs.origines.values())
+    paquets = [origines[i:i + _COMMUNES_PAR_APPEL]
+               for i in range(0, len(origines), _COMMUNES_PAR_APPEL)]
+
+    toutes: list[dict] = []
+    for etiquette, famille in jobs.familles().items():
+        (terme,) = famille.termes()
+        for paquet in paquets:
+            params = {**commun, "motsCles": mots_cles(terme),
+                      "commune": ",".join(o.insee for o in paquet)}
+            toutes.extend(provenance.marquer(_toutes_les_pages(token, params, terme), [etiquette]))
+
+    for origine in origines:
+        params = {**commun, "commune": origine.insee, "tempsPlein": "false"}
+        lot = _toutes_les_pages(token, params, f"temps partiel, {origine.libelle}")
+        toutes.extend(provenance.marquer(lot, [recherche.ETIQUETTE_SANS_MOT_CLE]))
+
+    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
+    logger.info("France Travail (jobs étudiants) : %d offre(s) brute(s).", len(toutes))
     return toutes
 
 

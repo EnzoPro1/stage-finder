@@ -80,6 +80,9 @@ class Offre:
     # famille, pas la famille-titre. Aucune requête : comparaison de chaînes.
     familles_titre: list[str] = field(default_factory=list)
 
+    # Signalements qui n'excluent PAS l'offre (jobs étudiants : « alternance »).
+    drapeaux: list[str] = field(default_factory=list)
+
     # Toutes les annonces fusionnées dans cette offre, une par (source, clé).
     # `url` et `source` ci-dessus restent ceux de la version la plus riche.
     liens: list[Lien] = field(default_factory=list)

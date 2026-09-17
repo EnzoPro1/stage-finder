@@ -61,3 +61,54 @@ familles:
   cyber:
     fr: ["cybersécurité", "sécurité de l'IA"]
     en: ["cybersecurity", "AI security"]
+
+
+# =============================================================================
+#  Jobs étudiants
+# =============================================================================
+#
+# Une requête autour de chaque ORIGINE, dans un rayon. Le tri fin se fera sur
+# le temps de trajet depuis n'importe quelle origine (CP6), jamais sur un code
+# de département : le rayon ne sert qu'à borner ce qu'on demande aux sources.
+#
+# Chaque origine porte les formes que les sources comprennent — sondé le
+# 2026-09-17 :
+#   insee        France Travail (`commune`, jusqu'à 5 codes par appel)
+#   code_postal  Adzuna — `where=Meaux` rend 0, `where=77100` rend des
+#                offres ; son rayon par défaut est de 10 km
+#   commune      Careerjet et Indeed, en toutes lettres
+student_jobs:
+
+  # Rayon autour de chaque origine, en km. Adzuna, temps partiel, 7 jours
+  # (sondé le 2026-09-17) : Meaux 164 / 498 / 1 899 à 10 / 15 / 25 km,
+  # Évry-Courcouronnes 38 / 94 / 519, Noisy-le-Grand 537 / 1 131 / 3 231.
+  # L'écart réel des offres rendues suit le rayon demandé (+1 à 4 km).
+  rayon_km: 15
+
+  origines:
+    ville_a:
+      libelle: "Meaux"
+      commune: "Meaux"
+      insee: "77284"
+      code_postal: "77100"
+    ville_b:
+      libelle: "Évry-Courcouronnes"
+      commune: "Évry-Courcouronnes"
+      insee: "91228"
+      code_postal: "91000"
+    campus:
+      libelle: "ESIEE Paris (Noisy-le-Grand)"
+      commune: "Noisy-le-Grand"
+      insee: "93051"
+      code_postal: "93160"
+
+  # Termes, un par étiquette. Pas de filtre « temps partiel » côté source, sauf
+  # la requête sans mot-clé de France Travail (ci-dessous) : les annonces de
+  # job étudiant ne renseignent presque jamais la durée. Careerjet autour de
+  # Meaux : 12 offres avec `contractperiod=p`, 108 avec une requête OU
+  # de ces 16 termes et sans filtre.
+  termes: ["étudiant", "job étudiant", "temps partiel", "mi-temps", "week-end",
+           "extra", "saisonnier", "soirée", "vendeur", "équipier", "hôte de caisse",
+           "préparateur de commandes", "serveur", "animateur", "soutien scolaire",
+           "cours particuliers"]
+

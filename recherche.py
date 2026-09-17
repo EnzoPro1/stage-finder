@@ -97,12 +97,102 @@ class TermeInterroge:
     familles: tuple[str, ...]
 
 
+def slug(terme: str) -> str:
+    """« Hôte de caisse » -> « hote_de_caisse » : un terme devenu nom d'étiquette."""
+    t = unicodedata.normalize("NFKD", terme.casefold())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return "_".join(re.findall(r"[a-z0-9]+", t))
+
+
+class Origine(BaseModel):
+    """Un point de départ des jobs étudiants, sous les formes que les sources comprennent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    libelle: str = Field(min_length=1)
+    commune: str = Field(min_length=1)
+    insee: str = Field(pattern=r"^(\d{5}|2[AB]\d{3})$")
+    code_postal: str = Field(pattern=r"^\d{5}$")
+
+
+# Étiquette de l'unique requête SANS mot-clé (France Travail, temps partiel
+# structuré). Ce n'est pas un terme : elle dit quelle requête a trouvé l'offre.
+ETIQUETTE_SANS_MOT_CLE = "temps_partiel_sans_mot_cle"
+
+# Étiquette d'une offre rapportée par une requête OU dont aucun terme n'est
+# retrouvé dans le texte livré (extrait tronqué, forme fléchie : « vendeuse »
+# n'est pas « vendeur »). Elle dit « trouvée, sans savoir par quel terme ».
+ETIQUETTE_NON_RETROUVE = "terme_non_retrouve"
+
+
+class JobsEtudiants(BaseModel):
+    """Bloc ``student_jobs`` : origines, rayon, termes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rayon_km: int = Field(gt=0, le=100)
+    origines: dict[str, Origine] = Field(min_length=1)
+    termes: list[str] = Field(min_length=1)
+
+    @field_validator("origines")
+    @classmethod
+    def _noms_d_origine(cls, origines: dict[str, Origine]) -> dict[str, Origine]:
+        invalides = [nom for nom in origines if not _MOTIF_NOM_FAMILLE.match(nom)]
+        if invalides:
+            raise ValueError("nom(s) d'origine invalide(s) : " + ", ".join(invalides))
+        return origines
+
+    @field_validator("termes")
+    @classmethod
+    def _termes_distincts(cls, termes: list[str]) -> list[str]:
+        propres = [t.strip() for t in termes]
+        if any(not t for t in propres):
+            raise ValueError("terme vide")
+        vus: dict[str, str] = {}
+        for terme in propres:
+            nom = slug(terme)
+            if not nom or not _MOTIF_NOM_FAMILLE.match(nom):
+                raise ValueError(f"terme sans étiquette possible : « {terme} »")
+            if nom in vus:
+                raise ValueError(f"« {terme} » et « {vus[nom]} » donnent la même étiquette « {nom} »")
+            if nom in (ETIQUETTE_SANS_MOT_CLE, ETIQUETTE_NON_RETROUVE):
+                raise ValueError(f"« {terme} » prend l'étiquette réservée {nom}")
+            vus[nom] = terme
+        return propres
+
+    def familles(self) -> dict[str, Famille]:
+        """Chaque terme comme une famille à un terme, nommée par son étiquette.
+
+        Toute la mécanique des familles de stage — provenance, familles-titre,
+        bilan par famille — s'applique ainsi telle quelle aux jobs étudiants.
+        """
+        return {slug(t): Famille(fr=[t]) for t in self.termes}
+
+
 class Recherche(BaseModel):
     """Contenu validé de ``recherche.yaml``."""
 
     model_config = ConfigDict(extra="forbid")
 
     familles: dict[str, Famille] = Field(min_length=1)
+    student_jobs: JobsEtudiants | None = None
+
+    @model_validator(mode="after")
+    def _etiquettes_disjointes(self) -> "Recherche":
+        """Une étiquette de job étudiant ne doit pas porter le nom d'une famille de stage."""
+        if self.student_jobs:
+            communes = set(self.familles) & set(self.student_jobs.familles())
+            if communes:
+                raise ValueError("étiquettes à la fois famille de stage et terme de job "
+                                 "étudiant : " + ", ".join(sorted(communes)))
+        return self
+
+    def toutes_familles(self) -> dict[str, Famille]:
+        """Familles de stage et étiquettes de jobs étudiants, pour les retrouver par nom."""
+        toutes = dict(self.familles)
+        if self.student_jobs:
+            toutes.update(self.student_jobs.familles())
+        return toutes
 
     @field_validator("familles")
     @classmethod
@@ -213,16 +303,28 @@ def familles_dans_titre(titre: str, familles: list[str]) -> list[str]:
 
     Accents, casse et ponctuation ignorés, mots entiers. Une famille inconnue
     du fichier (renommée depuis) n'est jamais retenue. Sans famille, le
-    fichier n'est pas lu.
+    fichier n'est pas lu. Vaut pour les familles de stage comme pour les
+    étiquettes de jobs étudiants.
     """
     if not familles:
         return []
-    r = charger()
-    t = _forme_mots(titre)
+    connues = charger().toutes_familles()
+    return familles_dans_texte(titre, [f for f in familles if f in connues], connues)
+
+
+def familles_dans_texte(texte: str, candidates: list[str],
+                        connues: dict[str, Famille] | None = None) -> list[str]:
+    """Parmi ``candidates``, les familles dont un terme figure dans ``texte``, dans leur ordre.
+
+    Sert à étiqueter une offre trouvée par une requête OU : le moteur ne dit
+    pas lequel des termes a répondu, le texte de l'offre le dit (mots entiers,
+    balises HTML comprises — « <b>vendeur</b> » est trouvé).
+    """
+    connues = connues if connues is not None else charger().toutes_familles()
+    t = _forme_mots(texte)
     return [
-        nom for nom in familles
-        if nom in r.familles
-        and any(_forme_mots(terme) in t for terme in r.familles[nom].termes())
+        nom for nom in candidates
+        if nom in connues and any(_forme_mots(terme) in t for terme in connues[nom].termes())
     ]
 
 

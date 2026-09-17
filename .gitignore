@@ -18,6 +18,10 @@ stages.html
 # clone. Ces motifs vivaient dans `.git/info/exclude`, qui n'est NI versionné
 # NI cloné — il ne protégeait donc que cette copie de travail.
 stages.db
+# Base des jobs étudiants (`config.CHEMIN_BASE_JOBS`) : offres scrapées aussi.
+jobs_etudiants.db
+jobs_etudiants.db-wal
+jobs_etudiants.db-shm
 # Journal WAL et mémoire partagée : `storage.ouvrir` pose `journal_mode=WAL`,
 # qui fait apparaître ces deux fichiers À CÔTÉ de la base. Ils contiennent des
 # pages de `stages.db` — donc des offres scrapées — et `stages.db` seul ne les

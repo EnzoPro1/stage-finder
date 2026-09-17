@@ -235,7 +235,92 @@ JOBSPY_SITES = ["indeed", "linkedin"]
 JOBSPY_RESULTATS_PAR_SITE = {"indeed": 300, "linkedin": 60}
 
 # ---------------------------------------------------------------------------
-# 2 ter) Métiers suivis par le tableau de bord marché (market.py)
+# 2 ter) Jobs étudiants
+# ---------------------------------------------------------------------------
+# Origines, rayon et termes vivent dans recherche.yaml (bloc `student_jobs`).
+# Ici : quelles sources, et jusqu'où elles paginent.
+#
+# Run réel du 2026-09-17 (3 origines, 15 km, 16 termes) — 222 s au total :
+#
+#   source          appels HTTP  brut   gardées  après dédup  sans terme retrouvé
+#   france_travail  23 (+1 jeton) 1195   1195     1059          0
+#   jobspy:indeed    9            600    578      456           86
+#   adzuna           9            352    352      335          270
+#   careerjet        8            308    141      118           41
+#
+# Adzuna est BRUYANT : `what_or` de mots isolés (« partiel », « caisse »,
+# « extra »…) remonte 6 135 offres autour de Noisy-le-Grand, dont 270 des 335
+# gardées ne contiennent aucun des termes (« Commercial Immobilier »…). Elle
+# est aussi TRONQUÉE (150 lues). Careerjet : 167 offres trop vieilles sur 308
+# (pas de fenêtre de date côté API), 3 pages lues sur 6 autour de Noisy.
+SOURCES_ACTIVES_JOBS = [
+    "france_travail",
+    "adzuna",
+    "careerjet",
+    "jobspy",
+]
+
+# Retirées volontairement des jobs étudiants, avec la raison — imprimées en
+# tête du bilan, comme pour les stages.
+SOURCES_ECARTEES_JOBS = {
+    "free_work": (
+        "job board tech/IT : ni recherche par lieu, ni mot-clé pris en compte "
+        "côté serveur — rien à y chercher en jobs étudiants locaux"
+    ),
+    "jooble": (
+        "« Paris » résolu en Paris, Texas (2026-09-05) ; non réévaluée sur des "
+        "communes de Seine-et-Marne"
+    ),
+    "jobspy:linkedin": (
+        "gisement de postes qualifiés, pas de jobs étudiants locaux ; ~80 s par "
+        "requête et risque de blocage — non interrogé ici"
+    ),
+    "jobspy:google": (
+        "Google répond 200 avec une page qui exige JavaScript, sans offre ni "
+        "curseur (2026-09-17)"
+    ),
+}
+
+# Base SÉPARÉE de stages.db, même schéma. `stages.db` est lue par le tableau de
+# bord marché, la génération de CV, `etiqueter.py` (qui présente ses offres à
+# l'étiquetage à l'aveugle) et `evaluer_ranking.py` — tous écrits pour des
+# STAGES. Y verser des jobs étudiants les ferait entrer dans le corpus
+# d'évaluation du ranking. Le rapport unifié lit les deux bases.
+CHEMIN_BASE_JOBS = Path("jobs_etudiants.db")
+
+# Mots de contrat qui, dans le TITRE, marquent une alternance. Les jobs
+# étudiants ne l'EXCLUENT pas : l'offre reste, avec un drapeau « alternance ».
+MOTS_CLES_ALTERNANCE = [
+    "alternance", "alternant", "alternante", "apprentissage", "apprenti",
+    "apprentie", "professionnalisation",
+]
+
+# France Travail : pages par requête (FRANCE_TRAVAIL_RESULTATS offres chacune).
+# Au-delà, un conseil « tronquée » est imprimé en tête du bilan.
+FRANCE_TRAVAIL_PAGES_JOBS = 4
+
+# Adzuna : une requête par origine, `what_or` des mots des termes.
+ADZUNA_PAGES_JOBS = 3
+ADZUNA_RESULTATS_PAR_PAGE_JOBS = 50    # plafond de l'API
+# Mots trop génériques pour être interrogés seuls. Adzuna ne sait pas faire de
+# phrase : « temps partiel » arrive en « temps » OU « partiel », « cours
+# particuliers » en « cours » OU « particuliers ». On garde le mot qui porte
+# le sens (« partiel », « scolaire »…) et on retire celui qui ramènerait tout.
+# Les étiquettes, elles, sont posées sur la PHRASE retrouvée dans le texte.
+ADZUNA_MOTS_IGNORES_JOBS = [
+    "de", "job", "temps", "mi", "week", "end", "cours", "particuliers",
+    "commandes", "soutien",
+]
+
+# Careerjet : une requête OU par origine.
+CAREERJET_PAGES_JOBS = 3
+CAREERJET_TAILLE_PAGE_JOBS = 50
+
+# JobSpy : sites interrogés pour les jobs étudiants, autour de chaque origine.
+JOBSPY_SITES_JOBS = ["indeed"]
+
+# ---------------------------------------------------------------------------
+# 2 quater) Métiers suivis par le tableau de bord marché (market.py)
 # ---------------------------------------------------------------------------
 # Intitulés en TEXTE LIBRE, convertis en codes métier ROME par l'API ROMEO de
 # France Travail (sources/romeo.py). Mesurer un marché par code ROME plutôt que

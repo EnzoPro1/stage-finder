@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import Callable, Iterable
 
+import recherche
+
 # Clé réservée dans le dict brut. Préfixe « _ » : aucune API ne l'emploie.
 CLE_FAMILLES = "_familles"
 
@@ -44,6 +46,25 @@ def marquer(items: Iterable[dict], familles: Iterable[str]) -> list[dict]:
     for item in lot:
         deja = familles_de(item)
         item[CLE_FAMILLES] = deja + [f for f in familles if f not in deja]
+    return lot
+
+
+def marquer_par_texte(
+    items: Iterable[dict], candidates: list[str], texte_de: Callable[[dict], str]
+) -> list[dict]:
+    """Étiquette chaque item par les familles dont un terme figure dans SON texte.
+
+    Pour une requête OU : le moteur ne dit pas quel terme a répondu. Le texte
+    livré (titre, description ou extrait) le dit, mots entiers. Sans terme
+    retrouvé, l'item porte ``recherche.ETIQUETTE_NON_RETROUVE`` — jamais rien :
+    une offre sans étiquette ressemblerait à une offre d'une source qui
+    n'interroge pas par terme.
+    """
+    lot = list(items)
+    connues = recherche.charger().toutes_familles()
+    for item in lot:
+        trouvees = recherche.familles_dans_texte(texte_de(item) or "", candidates, connues)
+        marquer([item], trouvees or [recherche.ETIQUETTE_NON_RETROUVE])
     return lot
 
 

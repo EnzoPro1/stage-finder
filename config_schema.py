@@ -47,6 +47,18 @@ class ConfigModel(BaseModel):
     FREE_WORK_PAGES: int = Field(gt=0, le=20)
     FRANCE_TRAVAIL_RESULTATS: int = Field(gt=0, le=150)  # plafond de l'API
     JOBSPY_SITES: list[str] = Field(min_length=1)
+
+    # --- Jobs étudiants ---
+    SOURCES_ACTIVES_JOBS: list[str] = Field(min_length=1)
+    SOURCES_ECARTEES_JOBS: dict[str, str]
+    MOTS_CLES_ALTERNANCE: list[str] = Field(min_length=1)
+    FRANCE_TRAVAIL_PAGES_JOBS: int = Field(ge=1, le=21)   # l'API s'arrête à l'index 3149
+    ADZUNA_PAGES_JOBS: int = Field(ge=1, le=20)
+    ADZUNA_RESULTATS_PAR_PAGE_JOBS: int = Field(ge=1, le=50)
+    ADZUNA_MOTS_IGNORES_JOBS: list[str]
+    CAREERJET_PAGES_JOBS: int = Field(ge=1, le=20)
+    CAREERJET_TAILLE_PAGE_JOBS: int = Field(ge=1, le=99)
+    JOBSPY_SITES_JOBS: list[str] = Field(min_length=1)
     JOBSPY_RESULTATS_PAR_SITE: dict[str, int] = Field(min_length=1)
 
     # --- Tableau de bord marché ---
@@ -125,7 +137,7 @@ class ConfigModel(BaseModel):
         # Accepte la liste de dicts telle qu'écrite dans config.py.
         return valeur
 
-    @field_validator("SOURCES_ACTIVES")
+    @field_validator("SOURCES_ACTIVES", "SOURCES_ACTIVES_JOBS")
     @classmethod
     def _sources_connues(cls, valeur: list[str]) -> list[str]:
         """Refuse un nom de source absent du catalogue (faute de frappe = fail-fast)."""
@@ -149,19 +161,26 @@ class ConfigModel(BaseModel):
         from sources.registry import CATALOGUE
 
         problemes = []
-        for nom, raison in self.SOURCES_ECARTEES_STAGES.items():
-            # « jobspy:google » : un site d'une source du catalogue.
-            base, _, site = nom.partition(":")
-            if base not in CATALOGUE:
-                problemes.append(f"« {nom} » inconnue du catalogue")
-            if not site and nom in self.SOURCES_ACTIVES:
-                problemes.append(f"« {nom} » à la fois active et écartée")
-            if site and base == "jobspy" and site in self.JOBSPY_SITES:
-                problemes.append(f"« {nom} » à la fois dans JOBSPY_SITES et écartée")
-            if not raison.strip():
-                problemes.append(f"« {nom} » écartée sans raison")
+        perimetres = [
+            ("SOURCES_ECARTEES_STAGES", self.SOURCES_ECARTEES_STAGES,
+             self.SOURCES_ACTIVES, self.JOBSPY_SITES),
+            ("SOURCES_ECARTEES_JOBS", self.SOURCES_ECARTEES_JOBS,
+             self.SOURCES_ACTIVES_JOBS, self.JOBSPY_SITES_JOBS),
+        ]
+        for reglage, ecartees, actives, sites in perimetres:
+            for nom, raison in ecartees.items():
+                # « jobspy:google » : un site d'une source du catalogue.
+                base, _, site = nom.partition(":")
+                if base not in CATALOGUE:
+                    problemes.append(f"{reglage} : « {nom} » inconnue du catalogue")
+                if not site and nom in actives:
+                    problemes.append(f"{reglage} : « {nom} » à la fois active et écartée")
+                if site and base == "jobspy" and site in sites:
+                    problemes.append(f"{reglage} : « {nom} » à la fois interrogé et écarté")
+                if not raison.strip():
+                    problemes.append(f"{reglage} : « {nom} » écartée sans raison")
         if problemes:
-            raise ValueError("SOURCES_ECARTEES_STAGES : " + " ; ".join(problemes))
+            raise ValueError(" ; ".join(problemes))
         return self
 
     @model_validator(mode="after")

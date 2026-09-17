@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS offres (
     tags         TEXT,
     familles     TEXT,   -- familles de requêtes, séparées par des espaces
     familles_titre TEXT, -- parmi elles, celles dont un terme est dans le titre
+    drapeaux     TEXT,   -- signalements non excluants (« alternance »)
     dernier_score REAL,
     premiere_vue TEXT,   -- date ISO du premier run où l'offre est apparue
     derniere_vue TEXT,   -- date ISO du dernier run
@@ -147,7 +148,7 @@ def ouvrir(chemin: str | None = None) -> sqlite3.Connection:
 
 # Colonnes ajoutées à `offres` après sa création. `CREATE TABLE IF NOT EXISTS`
 # ne touche pas une table existante : une base d'avant CP3 doit les recevoir.
-_COLONNES_AJOUTEES = (("familles", "TEXT"), ("familles_titre", "TEXT"))
+_COLONNES_AJOUTEES = (("familles", "TEXT"), ("familles_titre", "TEXT"), ("drapeaux", "TEXT"))
 
 
 def _ajouter_colonnes_manquantes(conn: sqlite3.Connection) -> None:
@@ -254,13 +255,14 @@ def enregistrer_run(
             conn.execute(
                 """INSERT INTO offres
                    (cle, title, company, location, url, source, posted_at, salary,
-                    duree_mois, date_debut, tags, familles, familles_titre,
+                    duree_mois, date_debut, tags, familles, familles_titre, drapeaux,
                     dernier_score, premiere_vue, derniere_vue, nb_vues)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
                 (
                     cle, offre.title, offre.company, offre.location, offre.url,
                     offre.source, offre.posted_at, offre.salary, offre.duree_mois,
                     offre.date_debut, " ".join(offre.tags), familles, familles_titre,
+                    " ".join(offre.drapeaux),
                     round(float(score), 4), offre.premiere_vue, aujourd_hui,
                 ),
             )
@@ -271,7 +273,7 @@ def enregistrer_run(
                 """UPDATE offres
                    SET title=?, company=?, location=?, url=?, source=?, posted_at=?,
                        salary=?, duree_mois=?, date_debut=?, tags=?, familles=?,
-                       familles_titre=?, dernier_score=?,
+                       familles_titre=?, drapeaux=?, dernier_score=?,
                        derniere_vue=?,
                        nb_vues = nb_vues + (CASE WHEN derniere_vue <> ? THEN 1 ELSE 0 END)
                    WHERE cle=?""",
@@ -279,7 +281,7 @@ def enregistrer_run(
                     offre.title, offre.company, offre.location, offre.url,
                     offre.source, offre.posted_at, offre.salary, offre.duree_mois,
                     offre.date_debut, " ".join(offre.tags), familles, familles_titre,
-                    round(float(score), 4), aujourd_hui, aujourd_hui, cle,
+                    " ".join(offre.drapeaux), round(float(score), 4), aujourd_hui, aujourd_hui, cle,
                 ),
             )
 
@@ -311,7 +313,8 @@ def enregistrer_run(
 
     logger.info(
         "SQLite : run enregistré (%d offre(s), %d nouveauté(s), %d texte(s)) dans %s.",
-        len(classees), len(nouvelles), len(a_ecrire), config.CHEMIN_BASE,
+        len(classees), len(nouvelles), len(a_ecrire),
+        next((l[2] for l in conn.execute("PRAGMA database_list") if l[1] == "main"), "?"),
     )
     return nouvelles
 

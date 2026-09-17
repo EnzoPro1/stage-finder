@@ -32,6 +32,7 @@ Testable isolément :  python -m sources.jobspy_source
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 
@@ -63,6 +64,8 @@ _LOCALISATION = f"{config.LIEU}, France"
 _JOURNAUX = {"indeed": "JobSpy:Indeed", "linkedin": "JobSpy:LinkedIn", "google": "JobSpy:Google"}
 
 _MOTIF_CODE_HTTP = re.compile(r"\b[1-5]\d\d\b")
+
+_KM_PAR_MILE = 1.609344
 
 
 def ligne(site: str) -> str:
@@ -116,8 +119,14 @@ def _consoles_jobspy_au_niveau_erreur() -> None:
                     handler.setLevel(logging.ERROR)
 
 
-def _scraper(site: str, requete: str, libelle: str) -> list[dict]:
-    """Scrape UN site pour UNE requête. Retourne une liste de dicts (ou [])."""
+def _scraper(site: str, requete: str, libelle: str, lieu: str | None = None,
+             rayon_km: int | None = None) -> list[dict]:
+    """Scrape UN site pour UNE requête. Retourne une liste de dicts (ou []).
+
+    ``lieu`` vaut par défaut « Paris, France » (stages). ``rayon_km`` est
+    converti en MILES, l'unité de JobSpy ; sans lui, JobSpy prend 50 miles.
+    """
+    rayon = {"distance": max(1, math.ceil(rayon_km / _KM_PAR_MILE))} if rayon_km else {}
     journal = logging.getLogger(_JOURNAUX.get(site, f"JobSpy:{site}"))
     temoin = _Temoin()
     journal.addHandler(temoin)
@@ -126,7 +135,8 @@ def _scraper(site: str, requete: str, libelle: str) -> list[dict]:
         df = scrape_jobs(
             site_name=[site],
             search_term=requete,
-            location=_LOCALISATION,
+            location=lieu or _LOCALISATION,
+            **rayon,
             results_wanted=config.JOBSPY_RESULTATS_PAR_SITE.get(
                 site, config.RESULTATS_PAR_TERME),
             country_indeed="France",
@@ -195,6 +205,43 @@ def recuperer_offres() -> list[dict]:
 
     toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("JobSpy : %d offre(s) brute(s) au total.", len(toutes))
+    return toutes
+
+
+def texte_brut(item: dict) -> str:
+    """Titre et description d'une ligne JobSpy, pour y retrouver les termes."""
+    return f"{item.get('title') or ''} {item.get('description') or ''}"
+
+
+def recuperer_jobs_etudiants() -> list[dict]:
+    """Jobs étudiants : UNE requête OU des termes par SITE × ORIGINE, dans le rayon.
+
+    Pas de `job_type` : chez Indeed, JobSpy ne peut pas le combiner à
+    `hours_old`, et la fraîcheur prime. Chaque offre est étiquetée par les
+    termes retrouvés dans son titre et sa description.
+    """
+    if scrape_jobs is None:
+        for site in config.JOBSPY_SITES_JOBS:
+            observabilite.signaler(ligne(site), "import", str(_ERREUR_IMPORT))
+        logger.warning("JobSpy indisponible (import impossible : %s).", _ERREUR_IMPORT)
+        return []
+
+    jobs = recherche.charger().student_jobs
+    etiquettes = list(jobs.familles())
+    requete = recherche.expression_ou(jobs.termes)
+    toutes: list[dict] = []
+    premier_appel = True
+    for site in config.JOBSPY_SITES_JOBS:
+        for origine in jobs.origines.values():
+            if not premier_appel:
+                time.sleep(config.DELAI_ENTRE_REQUETES)
+            premier_appel = False
+            lot = _scraper(site, requete, f"jobs étudiants, {origine.libelle}",
+                           lieu=f"{origine.commune}, France", rayon_km=jobs.rayon_km)
+            toutes.extend(provenance.marquer_par_texte(lot, etiquettes, texte_brut))
+
+    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
+    logger.info("JobSpy (jobs étudiants) : %d offre(s) brute(s).", len(toutes))
     return toutes
 
 

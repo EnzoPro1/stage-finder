@@ -68,17 +68,26 @@ def _chercher_une_page(
     ``[]`` muet.
     """
     params = {
-        "app_id": app_id,
-        "app_key": app_key,
         "results_per_page": config.RESULTATS_PAR_TERME,
         "title_only": titre,
         "what_or": " ".join(mots),
         "where": config.LIEU,
+    }
+    return _interroger(app_id, app_key, params, f"{titre} + {libelle} (page {page})", page)[0]
+
+
+def _interroger(
+    app_id: str, app_key: str, specifiques: dict, terme: str, page: int
+) -> tuple[list[dict], int | None]:
+    """UNE page Adzuna. Rend (offres, `count` annoncé par l'API ou None)."""
+    params = {
+        "app_id": app_id,
+        "app_key": app_key,
         # Fraîcheur poussée côté API : offres publiées dans les N derniers jours.
         "max_days_old": config.JOURS_FRAICHEUR,
         "content-type": "application/json",
+        **specifiques,
     }
-    terme = f"{titre} + {libelle} (page {page})"
     try:
         reponse = requests.get(
             f"{_BASE_URL}/{page}", params=params, timeout=config.TIMEOUT_HTTP
@@ -94,23 +103,27 @@ def _chercher_une_page(
             terme,
             masquer_secrets(err),
         )
-        return []
+        return [], None
 
     try:
         donnees = reponse.json()
     except ValueError:
         observabilite.signaler(NOM_SOURCE, "format", f"réponse non-JSON sur « {terme} »")
         logger.warning("Adzuna : réponse non-JSON pour « %s »", terme)
-        return []
+        return [], None
 
     resultats = donnees.get("results", [])
     if not isinstance(resultats, list):
         observabilite.signaler(NOM_SOURCE, "format", f"structure inattendue sur « {terme} »")
         logger.warning("Adzuna : format inattendu pour « %s »", terme)
-        return []
+        return [], None
 
     logger.info("Adzuna : %d offre(s) pour « %s »", len(resultats), terme)
-    return resultats
+    try:
+        count = int(donnees.get("count"))
+    except (TypeError, ValueError):
+        count = None
+    return resultats, count
 
 
 def recuperer_offres() -> list[dict]:
@@ -151,6 +164,65 @@ def recuperer_offres() -> list[dict]:
 
     toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("Adzuna : %d offre(s) brute(s) au total.", len(toutes))
+    return toutes
+
+
+def texte_brut(item: dict) -> str:
+    """Titre et description d'une offre Adzuna, pour y retrouver les termes."""
+    return f"{item.get('title') or ''} {item.get('description') or ''}"
+
+
+def recuperer_jobs_etudiants() -> list[dict]:
+    """Jobs étudiants : UNE requête par origine, par code postal et rayon explicite.
+
+    - `where` = code postal : « Meaux » et « Évry-Courcouronnes »
+      rendent 0 offre, leurs codes postaux en rendent (sondé le 2026-09-17) ;
+    - `distance` = rayon de recherche.yaml ; sans lui, Adzuna prend 10 km ;
+    - `what_or` = les MOTS des termes, moins ADZUNA_MOTS_IGNORES_JOBS : Adzuna
+      ne sait pas faire de OU de phrases (« hôte de caisse » -> « hôte »,
+      « caisse ») ;
+    - pas de `part_time` : le filtre structuré n'est tenu pour fiable que chez
+      France Travail.
+
+    Chaque offre est étiquetée par les termes retrouvés — en PHRASE — dans son
+    titre et sa description. Si `count` dépasse ce que les pages lues ont
+    rapporté, un CONSEIL le dit en tête du bilan.
+    """
+    app_id, app_key = _cles_disponibles()
+    if not app_id or not app_key:
+        observabilite.signaler(NOM_SOURCE, "cle_absente",
+                               "ADZUNA_APP_ID / ADZUNA_APP_KEY absents du .env")
+        logger.warning("Adzuna ignorée : ADZUNA_APP_ID / ADZUNA_APP_KEY absents du .env.")
+        return []
+
+    jobs = recherche.charger().student_jobs
+    etiquettes = list(jobs.familles())
+    mots = recherche.mots_isoles(jobs.termes, config.ADZUNA_MOTS_IGNORES_JOBS)
+    taille = config.ADZUNA_RESULTATS_PAR_PAGE_JOBS
+    toutes: list[dict] = []
+    for origine in jobs.origines.values():
+        lues, count = 0, None
+        for page in range(1, config.ADZUNA_PAGES_JOBS + 1):
+            specifiques = {"results_per_page": taille, "what_or": " ".join(mots),
+                           "where": origine.code_postal, "distance": jobs.rayon_km,
+                           "sort_by": "date"}
+            lot, count_page = _interroger(app_id, app_key, specifiques,
+                                          f"jobs étudiants, {origine.libelle} (page {page})", page)
+            count = count_page if count_page is not None else count
+            toutes.extend(provenance.marquer_par_texte(lot, etiquettes, texte_brut))
+            lues += len(lot)
+            if len(lot) < taille:
+                break
+        if count is not None and count > lues:
+            observabilite.conseiller(
+                NOM_SOURCE,
+                f"« {NOM_SOURCE} » TRONQUÉE autour de {origine.libelle} : {count} offres "
+                f"annoncées, {lues} rapatriées (ADZUNA_PAGES_JOBS = {config.ADZUNA_PAGES_JOBS} "
+                f"pages de {taille}).",
+            )
+
+    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
+    logger.info("Adzuna (jobs étudiants) : %d offre(s) brute(s).", len(toutes))
     return toutes
 
 

@@ -57,18 +57,22 @@ _UA = (
 )
 
 
-def _chercher_une_page(terme: str, page: int) -> tuple[list[dict], int]:
+def _chercher_une_page(
+    terme: str, page: int, lieu: str | None = None, taille: int | None = None,
+) -> tuple[list[dict], int]:
     """Interroge Careerjet pour UN terme et UNE page.
 
     Retourne ``(offres, nb_pages_total)``. ``nb_pages_total`` vaut 0 en cas
     d'échec, ce qui arrête proprement la pagination côté appelant.
+    ``lieu`` et ``taille`` valent par défaut `config.LIEU` et
+    `config.RESULTATS_PAR_TERME` (stages).
     """
     params = {
         "keywords": terme,
-        "location": config.LIEU,
+        "location": lieu or config.LIEU,
         "locale_code": config.CAREERJET_LOCALE,
         "affid": os.getenv("CAREERJET_AFFID") or _AFFID_DEMO,
-        "pagesize": config.RESULTATS_PAR_TERME,
+        "pagesize": taille or config.RESULTATS_PAR_TERME,
         "page": page,
         "sort": "date",  # les plus récentes d'abord (cohérent avec JOURS_FRAICHEUR)
         # Identité de l'appelant final exigée par l'API (on tourne en local).
@@ -185,6 +189,53 @@ def recuperer_offres() -> list[dict]:
 
     toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("Careerjet : %d offre(s) brute(s) au total.", len(toutes))
+    return toutes
+
+
+def texte_brut(item: dict) -> str:
+    """Titre et extrait d'une offre Careerjet, pour y retrouver les termes."""
+    return f"{item.get('title') or ''} {item.get('description') or ''}"
+
+
+def recuperer_jobs_etudiants() -> list[dict]:
+    """Jobs étudiants : UNE requête OU des termes par origine, SANS filtre de durée.
+
+    Le filtre `contractperiod=p` sous-déclare massivement : autour de
+    Meaux, 12 offres, contre 108 pour la requête OU des 16 termes
+    (sondé le 2026-09-17). Les annonces de job étudiant ne renseignent presque
+    jamais ce champ.
+
+    Careerjet ne dit pas quel terme a répondu : chaque offre est étiquetée par
+    les termes retrouvés dans son titre et son extrait
+    (`provenance.marquer_par_texte`). L'API n'a pas de paramètre de rayon :
+    « Meaux » ramène les communes voisines selon sa propre résolution.
+    """
+    jobs = recherche.charger().student_jobs
+    etiquettes = list(jobs.familles())
+    requete = recherche.expression_ou(jobs.termes)
+    toutes: list[dict] = []
+    for origine in jobs.origines.values():
+        n_origine = 0
+        for page in range(1, config.CAREERJET_PAGES_JOBS + 1):
+            lot, pages_total = _chercher_une_page(
+                requete, page, lieu=origine.commune, taille=config.CAREERJET_TAILLE_PAGE_JOBS)
+            toutes.extend(provenance.marquer_par_texte(lot, etiquettes, texte_brut))
+            n_origine += len(lot)
+            if not lot or page >= pages_total:
+                break
+        else:
+            if pages_total > config.CAREERJET_PAGES_JOBS:
+                observabilite.conseiller(
+                    NOM_SOURCE,
+                    f"« {NOM_SOURCE} » TRONQUÉE autour de {origine.libelle} : {pages_total} "
+                    f"pages annoncées, {config.CAREERJET_PAGES_JOBS} lues "
+                    f"(CAREERJET_PAGES_JOBS).",
+                )
+        logger.info("Careerjet (jobs étudiants) : %d offre(s) autour de %s.",
+                    n_origine, origine.libelle)
+
+    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
+    logger.info("Careerjet (jobs étudiants) : %d offre(s) brute(s).", len(toutes))
     return toutes
 
 
