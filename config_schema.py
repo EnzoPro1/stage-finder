@@ -166,13 +166,21 @@ def valider_config() -> ConfigModel:
     Appelé au démarrage de main.py : un réglage incohérent stoppe le programme
     tout de suite, avec un message pydantic explicite, au lieu d'un classement
     silencieusement cassé.
+
+    ``recherche.yaml`` est validé dans le même geste : c'est lui qui décide ce
+    que les sources interrogent, et une famille vide ferait tourner une
+    collecte amputée sans que rien ne le signale.
     """
+    import recherche
+
     champs = {
         nom: getattr(config, nom)
         for nom in ConfigModel.model_fields
         if hasattr(config, nom)
     }
-    return ConfigModel(**champs)
+    modele = ConfigModel(**champs)
+    recherche.lire(recherche.CHEMIN_RECHERCHE)
+    return modele
 
 
 if __name__ == "__main__":

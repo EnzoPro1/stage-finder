@@ -1,0 +1,61 @@
+# =============================================================================
+#  recherche.yaml — Familles de requêtes de STAGE
+# =============================================================================
+#
+# Une famille = un domaine visé. Chaque offre sera étiquetée avec la ou les
+# familles dont une requête l'a fait remonter (provenance, pas classification :
+# une famille ne dit pas ce qu'est l'offre, elle dit QUELLE QUESTION l'a trouvée).
+#
+# Termes COURTS, en français ET en anglais. Un même terme peut figurer dans les
+# deux langues (« LLM », « MLOps ») ou dans deux familles : il n'est interrogé
+# qu'une fois par source, et l'offre reçoit toutes les familles concernées.
+#
+# Les termes n'embarquent PAS « stage » / « internship » : chaque source ajoute
+# le type de contrat à sa manière, selon ce que son moteur sait exprimer.
+#
+# ## Ce que chaque moteur sait exprimer (sondes du 2026-09-17, Île-de-France)
+#
+#   France Travail  `motsCles` est CONJONCTIF, virgule comme espace :
+#                   vendeur 1 750, caissier 218, « vendeur,caissier » 8.
+#                   Pas de OU -> un appel par terme.
+#   Careerjet       OU supporté : vendeur 480, caissier 14, « vendeur OR
+#                   caissier » 493. Espace = ET (« vendeur caissier » 1).
+#                   Guillemets = phrase (machine learning 349, "…" 335).
+#                   Parenthèses cohérentes -> un appel par famille.
+#   Adzuna          `what_or` découpe sur les espaces : pas de OU de phrases
+#                   (mesuré le 2026-09-05, cf. config.py).
+#   Indeed/LinkedIn OU et guillemets documentés par JobSpy (non sondés : scraping).
+#
+# Validé au démarrage par `recherche.py` : une famille vide, un nom invalide ou
+# une clé inconnue arrêtent le programme.
+# =============================================================================
+
+familles:
+
+  ai_engineering:
+    fr: ["ingénieur IA", "intelligence artificielle", "IA générative", "agents IA", "LLM", "agents"]
+    en: ["AI engineer", "LLM", "GenAI", "AI agents", "agents"]
+
+  ml:
+    fr: ["machine learning", "ingénieur machine learning", "apprentissage automatique",
+         "deep learning", "data scientist", "data science", "NLP",
+         "traitement automatique du langage", "vision par ordinateur",
+         "ingénieur de recherche"]
+    en: ["machine learning", "machine learning engineer", "deep learning",
+         "data scientist", "data science", "NLP", "computer vision",
+         "applied scientist", "research engineer"]
+
+  mlops:
+    fr: ["MLOps", "LLMOps", "plateforme ML", "infrastructure ML"]
+    en: ["MLOps", "LLMOps", "ML platform", "ML infrastructure"]
+
+  inference:
+    fr: ["optimisation de l'inférence", "quantification", "GPU"]
+    en: ["inference optimization", "model serving", "vLLM", "quantization", "GPU"]
+
+  # Reprise des termes cyber de l'ancien `config.TERMES_RECHERCHE`
+  # (« stage cybersécurité », « internship AI security ») : la famille existe
+  # pour que la bascule vers les familles ne retire rien en silence.
+  cyber:
+    fr: ["cybersécurité", "sécurité de l'IA"]
+    en: ["cybersecurity", "AI security"]

@@ -32,6 +32,10 @@ pandas>=2.0
 # Validation de la configuration au démarrage (config_schema.py)
 pydantic>=2.0
 
+# Familles de requêtes (recherche.yaml). Déjà tiré en dépendance transitive,
+# déclaré ici parce que le projet l'importe directement.
+pyyaml>=6.0
+
 # App web locale interactive (app.py) : liste instantanée + vérif IA à la demande.
 flask>=3.0
 
