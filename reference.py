@@ -80,7 +80,7 @@ PREFIXE_INSTANTANE = "stages.reference-"
 #     qu'y prend une offre. Ils bougeront en Phase 3 et l'instantané changera
 #     alors de toute façon.
 #   - COMBO_TOUJOURS_AFFICHE, VERIFY_MIN_SCORE : affichage seul.
-#   - TERMES_RECHERCHE, SOURCES_ACTIVES : collecte seule.
+#   - recherche.yaml, SOURCES_ACTIVES : collecte seule.
 CONSTANTES_RANKING = (
     "config.MODELE_EMBEDDING",
     "config.MAX_SEQ_LENGTH",

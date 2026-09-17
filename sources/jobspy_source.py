@@ -5,7 +5,7 @@ sources/jobspy_source.py — Source d'offres via la bibliothèque python-jobspy
 Garde-fous demandés (scraping responsable) :
 - JAMAIS authentifié : JobSpy est utilisé sans identifiants (comportement par
   défaut). On ne fournit aucun cookie/compte perso.
-- Délais raisonnables : on interroge UN site à la fois, UN terme à la fois,
+- Délais raisonnables : on interroge UN site à la fois, UNE famille à la fois,
   avec une pause (config.DELAI_ENTRE_REQUETES) entre chaque requête.
 - Robustesse au blocage / rate-limit : chaque appel est isolé dans un
   try/except. Si un site bloque (429, captcha, timeout...), on loggue et on
@@ -26,6 +26,8 @@ import pandas as pd
 
 import config
 import observabilite
+import recherche
+from sources import provenance
 
 # L'import de jobspy peut être lourd ; on le protège pour un message clair.
 try:
@@ -58,7 +60,8 @@ def _scraper(site: str, terme: str) -> list[dict]:
             search_term=terme,
             google_search_term=google_terme,
             location=_LOCALISATION,
-            results_wanted=config.RESULTATS_PAR_TERME,
+            results_wanted=config.JOBSPY_RESULTATS_PAR_SITE.get(
+                site, config.RESULTATS_PAR_TERME),
             country_indeed="France",
             # Fraîcheur poussée côté source : offres des N derniers jours.
             hours_old=config.JOURS_FRAICHEUR * 24,
@@ -84,22 +87,31 @@ def _scraper(site: str, terme: str) -> list[dict]:
 
 
 def recuperer_offres() -> list[dict]:
-    """Agrège les offres brutes JobSpy sur tous les sites et tous les termes."""
+    """Agrège les offres brutes JobSpy : une requête par SITE × FAMILLE.
+
+    Indeed et LinkedIn comprennent OU, guillemets et parenthèses : une famille
+    entière tient dans « (stage OR internship …) ("machine learning" OR …) ».
+    Une offre trouvée par deux familles sur le même site n'est rendue qu'une
+    fois (identifiant JobSpy, préfixé par le site : « in-… », « li-… »).
+    """
     if scrape_jobs is None:
         observabilite.signaler(NOM_SOURCE, "import", str(_ERREUR_IMPORT))
         logger.warning("JobSpy indisponible (import impossible : %s).", _ERREUR_IMPORT)
         return []
 
+    familles = recherche.charger().familles
     toutes: list[dict] = []
     premier_appel = True
     for site in SITES:
-        for terme in config.TERMES_RECHERCHE:
+        for nom, famille in familles.items():
             # Pause polie entre deux requêtes (sauf tout premier appel).
             if not premier_appel:
                 time.sleep(config.DELAI_ENTRE_REQUETES)
             premier_appel = False
-            toutes.extend(_scraper(site, terme))
+            requete = recherche.requete_stage(famille.termes(), config.MOTS_CLES_STAGE)
+            toutes.extend(provenance.marquer(_scraper(site, requete), [nom]))
 
+    toutes = provenance.fusionner(toutes, lambda o: o.get("id") or o.get("job_url"))
     logger.info("JobSpy : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 

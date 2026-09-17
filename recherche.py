@@ -139,6 +139,74 @@ class Recherche(BaseModel):
         return [TermeInterroge(premier[c], tuple(familles_de[c])) for c in ordre]
 
 
+# ---------------------------------------------------------------------------
+# Composer une requête dans la grammaire de chaque moteur
+# ---------------------------------------------------------------------------
+# Ce qui est LU ici vient des sondes du 2026-09-17 (cf. l'en-tête de
+# recherche.yaml). Chaque source choisit la forme que son moteur comprend :
+#
+#   expression_ou   Careerjet, Indeed, LinkedIn — OU, guillemets, parenthèses
+#   mots_isoles     Adzuna — `what_or` ne connaît que des mots
+#   tranches        France Travail — conjonctif, donc un appel par terme
+
+
+def _entre_guillemets(terme: str) -> str:
+    """Un terme de plusieurs mots devient une phrase ; un mot seul reste nu."""
+    propre = terme.replace('"', " ").strip()
+    return f'"{propre}"' if re.search(r"[\s'’-]", propre) else propre
+
+
+def expression_ou(termes: list[str]) -> str:
+    """« (a OR "b c") » — un OU de phrases, dans la grammaire Careerjet/Indeed/LinkedIn.
+
+    Parenthèses même pour un seul terme : l'expression est toujours juxtaposée
+    à une autre (le groupe « type de contrat »), et une juxtaposition vaut ET.
+    """
+    return "(" + " OR ".join(_entre_guillemets(t) for t in termes) + ")"
+
+
+def requete_stage(termes: list[str], mots_contrat: list[str]) -> str:
+    """« (stage OR internship …) ("machine learning" OR NLP …) ».
+
+    Le groupe contrat reprend `config.MOTS_CLES_STAGE`, c'est-à-dire ce que
+    `filters.est_un_stage` exigera ensuite dans le titre : la requête ne
+    ramène pas ce que le filtre jetterait par construction.
+    """
+    return f"{expression_ou(mots_contrat)} {expression_ou(termes)}"
+
+
+_MOTIF_MOT = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def mots_isoles(termes: list[str], ignores: list[str]) -> list[str]:
+    """Les MOTS des termes, sans doublon, pour un moteur qui ne fait que des OU de mots.
+
+    « machine learning » devient « machine » et « learning » : c'est tout ce
+    qu'Adzuna sait exprimer. ``ignores`` retire les mots trop génériques pour
+    signifier la famille (« ingénieur », « data », « ia ») — sans quoi toute
+    offre d'ingénieur porterait l'étiquette « ml ». Les mots d'une lettre
+    (« l' ») tombent d'office.
+    """
+    exclus = {m.casefold() for m in ignores}
+    vus: list[str] = []
+    for terme in termes:
+        for mot in _MOTIF_MOT.findall(terme.casefold()):
+            if len(mot) > 1 and mot not in exclus and mot not in vus:
+                vus.append(mot)
+    return vus
+
+
+def tranches(termes: list[TermeInterroge], nombre: int) -> list[list[TermeInterroge]]:
+    """Répartit les termes en ``nombre`` tranches, à tour de rôle, dans l'ordre du fichier.
+
+    Tour de rôle et non hachage : les tranches restent équilibrées à un terme
+    près. Le prix est qu'ajouter un terme en milieu de fichier décale la
+    tranche des suivants — sans perte, puisque chaque tranche finit par passer.
+    """
+    nombre = max(1, nombre)
+    return [termes[i::nombre] for i in range(nombre)]
+
+
 def lire(chemin: str) -> Recherche:
     """Lit et valide un fichier de recherche. Lève si absent, illisible ou invalide."""
     try:

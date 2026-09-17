@@ -23,16 +23,22 @@ Testable isolément :  python -m sources.france_travail
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import threading
 import time
+from datetime import date
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
 import config
 import observabilite
+import recherche
+from sources import provenance
 
 load_dotenv()
 
@@ -137,14 +143,27 @@ def _obtenir_token(client_id: str, client_secret: str, scope: str | None = None)
     return token
 
 
+_MOTIF_MOT = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def mots_cles(terme: str) -> str:
+    """Un terme de recherche.yaml réduit à ce que ``motsCles`` accepte.
+
+    L'API ne tolère que lettres, chiffres et espaces, et des mots d'au moins
+    deux caractères : « optimisation de l'inférence » devient « optimisation
+    de inférence ». Le sens conjonctif ne change pas (tous les mots exigés).
+    """
+    return " ".join(m for m in _MOTIF_MOT.findall(terme) if len(m) >= 2)
+
+
 def _chercher_un_terme(token: str, terme: str) -> list[dict]:
     """Interroge France Travail pour un seul terme de recherche."""
     params = {
-        "motsCles": terme,
+        "motsCles": mots_cles(terme),
         "region": _REGION_IDF,
         # Offres publiées depuis N jours (le paramètre attend un nb de jours, ≤ 31).
         "publieeDepuis": min(config.JOURS_FRAICHEUR, 31),
-        "range": f"0-{max(0, config.RESULTATS_PAR_TERME - 1)}",
+        "range": f"0-{max(0, config.FRANCE_TRAVAIL_RESULTATS - 1)}",
     }
     _respecter_debit()
     try:
@@ -270,8 +289,55 @@ def compter_offres(
         return None
 
 
+# ---------------------------------------------------------------------------
+# Rotation des termes
+# ---------------------------------------------------------------------------
+# `motsCles` est conjonctif (sondé le 2026-09-17 : « vendeur,caissier » 8 contre
+# 1 750 et 218) : un appel par terme. Les termes sont répartis en
+# `config.FRANCE_TRAVAIL_TRANCHES` tranches, une seule interrogée par run — le
+# décompte qui justifie ce choix est dans config.py.
+#
+# La tranche choisie est la MOINS RÉCEMMENT interrogée, pas « la suivante » ni
+# « celle du jour » : les runs sont irréguliers (écarts de 1 à 4 jours
+# constatés dans `runs`), et une alternance par date ferait retomber deux runs
+# successifs sur la même tranche en laissant l'autre sans passage.
+
+
+def lire_rotation(chemin: str | Path, nombre: int) -> dict[int, str]:
+    """Date ISO du dernier passage de chaque tranche. {} si absent, illisible ou périmé.
+
+    L'état n'est valable que pour le nombre de tranches qui l'a produit : si
+    le réglage change, les indices ne désignent plus les mêmes termes, et on
+    repart de zéro plutôt que de croire une tranche fraîche à tort.
+    """
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            etat = json.load(f)
+        if etat.get("tranches") != nombre:
+            return {}
+        return {int(k): str(v) for k, v in (etat.get("passages") or {}).items()}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return {}
+
+
+def choisir_tranche(nombre: int, passages: dict[int, str]) -> int:
+    """La tranche jamais interrogée d'abord, sinon la plus anciennement ; à égalité, la première."""
+    return min(range(nombre), key=lambda i: (passages.get(i, ""), i))
+
+
+def ecrire_rotation(chemin: str | Path, nombre: int, passages: dict[int, str]) -> None:
+    """Enregistre l'état. Un échec d'écriture est loggé, jamais fatal."""
+    try:
+        with open(chemin, "w", encoding="utf-8") as f:
+            json.dump({"tranches": nombre,
+                       "passages": {str(k): v for k, v in sorted(passages.items())}},
+                      f, indent=2)
+    except OSError as err:
+        logger.warning("France Travail : état de rotation non écrit (%s).", err)
+
+
 def recuperer_offres() -> list[dict]:
-    """Agrège les offres brutes France Travail sur tous les termes de recherche."""
+    """Offres brutes France Travail : les termes d'UNE tranche, un appel chacun."""
     client_id, client_secret = _identifiants()
     if not client_id or not client_secret:
         observabilite.signaler(NOM_SOURCE, "cle_absente",
@@ -290,10 +356,33 @@ def recuperer_offres() -> list[dict]:
         observabilite.signaler(NOM_SOURCE, "auth", "jeton OAuth2 indisponible")
         return []
 
-    toutes: list[dict] = []
-    for terme in config.TERMES_RECHERCHE:
-        toutes.extend(_chercher_un_terme(token, terme))
+    nombre = config.FRANCE_TRAVAIL_TRANCHES
+    lots = recherche.tranches(recherche.charger().termes(), nombre)
+    passages = lire_rotation(config.CHEMIN_ROTATION, nombre)
+    indice = choisir_tranche(nombre, passages)
+    aujourd_hui = date.today()
 
+    precedent = passages.get(indice)
+    if precedent:
+        ecart = (aujourd_hui - date.fromisoformat(precedent)).days
+        if ecart > config.JOURS_FRAICHEUR:
+            logger.warning(
+                "France Travail : la tranche %d/%d n'avait pas été interrogée depuis "
+                "%d jours, plus que la fenêtre de fraîcheur (%d j) — des offres de "
+                "ses termes ont pu en sortir sans être vues.",
+                indice + 1, nombre, ecart, config.JOURS_FRAICHEUR,
+            )
+
+    termes = lots[indice]
+    logger.info("France Travail : tranche %d/%d, %d terme(s).", indice + 1, nombre, len(termes))
+    toutes: list[dict] = []
+    for t in termes:
+        toutes.extend(provenance.marquer(_chercher_un_terme(token, t.terme), t.familles))
+
+    passages[indice] = aujourd_hui.isoformat()
+    ecrire_rotation(config.CHEMIN_ROTATION, nombre, passages)
+
+    toutes = provenance.fusionner(toutes, lambda o: o.get("id"))
     logger.info("France Travail : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 

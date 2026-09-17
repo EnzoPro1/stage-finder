@@ -17,7 +17,8 @@ Deux particularités de cette API, apprises à ses dépens :
 L'``affid`` est un identifiant d'affiliation. Celui par défaut est l'identifiant
 de démonstration publié dans la doc Careerjet ; il fonctionne mais il est
 partagé (donc soumis à un quota commun). Pour un usage régulier, crée le tien
-sur https://www.careerjet.fr/partners/ et renseigne ``CAREERJET_AFFID`` au .env.
+sur https://www.careerjet.fr/partners/ et renseigne ``CAREERJET_AFFID`` au .env
+(déclaré dans ``.env.example``).
 
 Renvoie des dicts BRUTS ; la conversion se fait dans normalize.py.
 
@@ -34,7 +35,8 @@ from dotenv import load_dotenv
 
 import config
 import observabilite
-from sources import masquer_secrets
+import recherche
+from sources import masquer_secrets, provenance
 
 load_dotenv()
 
@@ -155,19 +157,28 @@ def compter_offres(mots_cles: str) -> int | None:
 
 
 def recuperer_offres() -> list[dict]:
-    """Agrège les offres brutes Careerjet sur tous les termes et toutes les pages."""
+    """Agrège les offres brutes Careerjet : une requête par FAMILLE, toutes pages.
+
+    Careerjet comprend OU, guillemets et parenthèses (sondé le 2026-09-17 :
+    vendeur 480, caissier 14, « vendeur OR caissier » 493). Une famille entière
+    tient donc dans une requête, « (stage OR internship …) ("machine learning"
+    OR NLP …) », au lieu d'un appel par terme. Une offre trouvée par deux
+    familles n'est rendue qu'une fois, avec les deux (identifiant : l'URL).
+    """
     toutes: list[dict] = []
-    for terme in config.TERMES_RECHERCHE:
-        n_terme = 0
+    for nom, famille in recherche.charger().familles.items():
+        requete = recherche.requete_stage(famille.termes(), config.MOTS_CLES_STAGE)
+        n_famille = 0
         for page in range(1, config.CAREERJET_PAGES + 1):
-            jobs, pages_total = _chercher_une_page(terme, page)
-            toutes.extend(jobs)
-            n_terme += len(jobs)
+            jobs, pages_total = _chercher_une_page(requete, page)
+            toutes.extend(provenance.marquer(jobs, [nom]))
+            n_famille += len(jobs)
             # Plus rien à paginer : dernière page atteinte ou requête en échec.
             if not jobs or page >= pages_total:
                 break
-        logger.info("Careerjet : %d offre(s) pour « %s »", n_terme, terme)
+        logger.info("Careerjet : %d offre(s) pour la famille « %s »", n_famille, nom)
 
+    toutes = provenance.fusionner(toutes, lambda o: o.get("url"))
     logger.info("Careerjet : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 

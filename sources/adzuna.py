@@ -7,7 +7,7 @@ Endpoint : GET https://api.adzuna.com/v1/api/jobs/fr/search/{page}
 Principe :
 - Lit les clés ADZUNA_APP_ID / ADZUNA_APP_KEY depuis le .env.
 - Si une clé manque -> on loggue un warning et on renvoie [] (jamais de crash).
-- Interroge chaque terme de recherche, agrège les résultats bruts.
+- Interroge chaque famille de recherche.yaml, agrège les résultats bruts.
 - Renvoie une liste de dictionnaires BRUTS (tels que fournis par Adzuna).
   La conversion vers le schéma commun est faite dans normalize.py.
 
@@ -24,7 +24,8 @@ from dotenv import load_dotenv
 
 import config
 import observabilite
-from sources import masquer_secrets
+import recherche
+from sources import masquer_secrets, provenance
 
 # Charge le .env dès l'import (idempotent).
 load_dotenv()
@@ -43,25 +44,25 @@ def _cles_disponibles() -> tuple[str | None, str | None]:
     return os.getenv("ADZUNA_APP_ID"), os.getenv("ADZUNA_APP_KEY")
 
 
-def _chercher_une_page(app_id: str, app_key: str, page: int) -> list[dict]:
-    """Interroge UNE page Adzuna, sur la requête « stage + domaine ».
+def _chercher_une_page(
+    app_id: str, app_key: str, titre: str, mots: list[str], libelle: str, page: int
+) -> list[dict]:
+    """Interroge UNE page Adzuna : ``titre`` exigé dans l'intitulé, ``mots`` en OU.
 
-    ## Pourquoi cette source n'utilise pas ``config.TERMES_RECHERCHE``
+    ## Pourquoi cette forme de requête
 
-    Le paramètre ``what`` d'Adzuna est CONJONCTIF : il exige tous les mots. Les
-    termes du projet en font 3 à 4 (« stage intelligence artificielle »), et
-    aucune annonce française ne les contient tous. Mesuré le 2026-09-05, à
-    Paris, sur ce terme : 0 offre avec la fenêtre de 7 jours, 4 sans la
-    fenêtre, 43 sans ``where``. Les cinq termes réunis rapportaient 2 offres,
-    et la source pesait 6 lignes dans `stages.db` en sept semaines.
+    Le paramètre ``what`` d'Adzuna est CONJONCTIF : il exige tous les mots.
+    Mesuré le 2026-09-05, à Paris, sur « stage intelligence artificielle » :
+    0 offre avec la fenêtre de 7 jours, 4 sans la fenêtre, 43 sans ``where``.
 
     On demande donc la même chose autrement : ``title_only`` pour exiger le mot
-    « stage » DANS LE TITRE — ce que `filters.est_un_stage` exigera de toute
-    façon, si bien que la requête et le filtre cessent de se contredire — et
-    ``what_or`` pour les termes de domaine, en OU au lieu d'un ET impossible.
+    de contrat DANS LE TITRE — ce que `filters.est_un_stage` exigera de toute
+    façon — et ``what_or`` pour les mots de la famille, en OU au lieu d'un ET
+    impossible. Adzuna ne sait pas faire un OU de PHRASES : les termes de
+    recherche.yaml y arrivent découpés en mots (`recherche.mots_isoles`).
 
     L'API répond **400 (et non 429)** quand elle étrangle, avec une page HTML.
-    ``raise_for_status`` en fait une ``RequestException``, désormais tracée en
+    ``raise_for_status`` en fait une ``RequestException``, tracée en
     ``http: HTTP 400`` par ``observabilite`` au lieu de disparaître dans un
     ``[]`` muet.
     """
@@ -69,14 +70,14 @@ def _chercher_une_page(app_id: str, app_key: str, page: int) -> list[dict]:
         "app_id": app_id,
         "app_key": app_key,
         "results_per_page": config.RESULTATS_PAR_TERME,
-        "title_only": config.ADZUNA_TITRE_EXIGE,
-        "what_or": config.ADZUNA_TERMES_DOMAINE,
+        "title_only": titre,
+        "what_or": " ".join(mots),
         "where": config.LIEU,
         # Fraîcheur poussée côté API : offres publiées dans les N derniers jours.
         "max_days_old": config.JOURS_FRAICHEUR,
         "content-type": "application/json",
     }
-    terme = f"{config.ADZUNA_TITRE_EXIGE} + domaine (page {page})"
+    terme = f"{titre} + {libelle} (page {page})"
     try:
         reponse = requests.get(
             f"{_BASE_URL}/{page}", params=params, timeout=config.TIMEOUT_HTTP
@@ -115,8 +116,9 @@ def recuperer_offres() -> list[dict]:
     """
     Point d'entrée de la source.
 
-    Renvoie la liste (potentiellement vide) des offres brutes Adzuna,
-    agrégées sur tous les termes de recherche de la config.
+    Une chaîne de pages par FAMILLE × MOT DE CONTRAT (``ADZUNA_TITRES_EXIGES``).
+    Chaque offre porte les familles qui l'ont trouvée ; une offre trouvée par
+    deux chaînes n'est rendue qu'une fois (identifiant Adzuna).
     """
     app_id, app_key = _cles_disponibles()
     if not app_id or not app_key:
@@ -128,15 +130,25 @@ def recuperer_offres() -> list[dict]:
         return []
 
     toutes: list[dict] = []
-    for page in range(1, config.ADZUNA_PAGES + 1):
-        lot = _chercher_une_page(app_id, app_key, page)
-        toutes.extend(lot)
-        # Page incomplète = dernière page : inutile d'en demander une de plus.
-        # C'est aussi le comportement en cas d'étranglement (lot vide), ce qui
-        # évite d'insister sur une API qui vient de refuser.
-        if len(lot) < config.RESULTATS_PAR_TERME:
-            break
+    for nom, famille in recherche.charger().familles.items():
+        mots = recherche.mots_isoles(famille.termes(), config.ADZUNA_MOTS_IGNORES)
+        if not mots:
+            # Tous les termes de la famille sont faits de mots ignorés : la
+            # famille n'existe pas pour Adzuna. On le dit plutôt que d'envoyer
+            # un `what_or` vide, qui ramènerait TOUS les stages sous son nom.
+            logger.warning("Adzuna : famille « %s » sans mot interrogeable, ignorée.", nom)
+            continue
+        for titre in config.ADZUNA_TITRES_EXIGES:
+            for page in range(1, config.ADZUNA_PAGES + 1):
+                lot = _chercher_une_page(app_id, app_key, titre, mots, nom, page)
+                toutes.extend(provenance.marquer(lot, [nom]))
+                # Page incomplète = dernière page : inutile d'en demander une
+                # de plus. C'est aussi le comportement en cas d'étranglement
+                # (lot vide), ce qui évite d'insister sur une API qui refuse.
+                if len(lot) < config.RESULTATS_PAR_TERME:
+                    break
 
+    toutes = provenance.fusionner(toutes, lambda o: o.get("id") or o.get("redirect_url"))
     logger.info("Adzuna : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 

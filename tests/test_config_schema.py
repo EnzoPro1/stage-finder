@@ -32,8 +32,8 @@ def test_mode_composition_inconnu(monkeypatch):
         valider_config()
 
 
-def test_liste_termes_vide_rejetee(monkeypatch):
-    monkeypatch.setattr(config, "TERMES_RECHERCHE", [])
+def test_liste_mots_de_contrat_adzuna_vide_rejetee(monkeypatch):
+    monkeypatch.setattr(config, "ADZUNA_TITRES_EXIGES", [])
     with pytest.raises(ValidationError):
         valider_config()
 
@@ -41,5 +41,17 @@ def test_liste_termes_vide_rejetee(monkeypatch):
 def test_coherence_duree_min_vs_cible(monkeypatch):
     monkeypatch.setattr(config, "DUREE_MIN_ACCEPTABLE", 12)
     monkeypatch.setattr(config, "DUREE_CIBLE_MOIS", 6)
+    with pytest.raises(ValidationError):
+        valider_config()
+
+
+def test_france_travail_au_dela_du_plafond_api_rejete(monkeypatch):
+    monkeypatch.setattr(config, "FRANCE_TRAVAIL_RESULTATS", 151)
+    with pytest.raises(ValidationError):
+        valider_config()
+
+
+def test_zero_tranche_rejetee(monkeypatch):
+    monkeypatch.setattr(config, "FRANCE_TRAVAIL_TRANCHES", 0)
     with pytest.raises(ValidationError):
         valider_config()

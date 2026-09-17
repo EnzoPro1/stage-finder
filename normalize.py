@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass, asdict, field
 from typing import TYPE_CHECKING
 
+from sources.provenance import familles_de
+
 if TYPE_CHECKING:  # verdict typé sans import runtime (évite le cycle verifier<->normalize)
     from verifier import Verdict
 
@@ -42,6 +44,11 @@ class Offre:
     # Placé en dernier avec une valeur par défaut : les normaliseurs positionnels
     # existants continuent de fonctionner sans le préciser.
     tags: list[str] = field(default_factory=list)
+
+    # Familles de requêtes (recherche.yaml) dont une requête a fait remonter
+    # l'offre. PROVENANCE, pas classification : vide pour une source qui
+    # n'interroge pas par terme (Free-Work filtre sur le type de contrat).
+    familles: list[str] = field(default_factory=list)
 
     # Signaux extraits par extract.py (colonnes filtrables). None/"" si illisibles.
     duree_mois: int | None = None      # durée du stage en mois
@@ -274,6 +281,9 @@ def normaliser(nom_source: str, items: list[dict]) -> list[Offre]:
         except Exception as err:  # noqa: BLE001 - item cassé : on le saute
             logger.debug("Item ignoré (%s) : %s", nom_source, err)
             continue
+        # La provenance est portée par le dict brut (sources/provenance.py) et
+        # recopiée ici, une fois, plutôt que dans chacun des normaliseurs.
+        offre.familles = familles_de(item)
         # On garde uniquement les offres a minima exploitables (titre + url).
         if offre.title and offre.url:
             offres.append(offre)

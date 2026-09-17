@@ -14,6 +14,7 @@ Utilisation :
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -33,18 +34,21 @@ class ConfigModel(BaseModel):
 
     # --- Recherche ---
     REQUETE_REFERENCE: str = Field(min_length=1)
-    TERMES_RECHERCHE: list[str] = Field(min_length=1)
     LIEU: str = Field(min_length=1)
     RESULTATS_PAR_TERME: int = Field(gt=0, le=200)
 
     # --- Sources ---
     SOURCES_ACTIVES: list[str] = Field(min_length=1)
-    ADZUNA_TITRE_EXIGE: str = Field(min_length=1)
-    ADZUNA_TERMES_DOMAINE: str = Field(min_length=1)
+    ADZUNA_TITRES_EXIGES: list[str] = Field(min_length=1)
+    ADZUNA_MOTS_IGNORES: list[str]
     ADZUNA_PAGES: int = Field(gt=0, le=20)
     CAREERJET_PAGES: int = Field(gt=0, le=20)
     CAREERJET_LOCALE: str = Field(min_length=2)
     FREE_WORK_PAGES: int = Field(gt=0, le=20)
+    FRANCE_TRAVAIL_RESULTATS: int = Field(gt=0, le=150)  # plafond de l'API
+    FRANCE_TRAVAIL_TRANCHES: int = Field(ge=1, le=10)
+    CHEMIN_ROTATION: Path
+    JOBSPY_RESULTATS_PAR_SITE: dict[str, int] = Field(min_length=1)
 
     # --- Tableau de bord marché ---
     METIERS_SUIVIS: list[str] = Field(min_length=1)

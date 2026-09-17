@@ -113,6 +113,7 @@ def _charger_cache() -> None:
             row["url"], row["source"], row.get("posted_at", ""), row.get("salary", ""),
         )
         offre.tags = row.get("tags", [])
+        offre.familles = row.get("familles", [])
         offre.duree_mois = row.get("duree_mois")
         offre.date_debut = row.get("date_debut", "")
         if row.get("verdict"):
@@ -160,6 +161,7 @@ def _row(offre: Offre, cos_score: float, cos_rang: int, inclure_desc: bool = Fal
         "url": offre.url, "source": offre.source,
         "duree_mois": offre.duree_mois, "date_debut": offre.date_debut,
         "tags": offre.tags,
+        "familles": offre.familles,
         "verdict": verdict.to_dict() if verdict else None,
     }
     if inclure_desc:

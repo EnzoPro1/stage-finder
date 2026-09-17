@@ -32,15 +32,12 @@ REQUETE_REFERENCE = (
 # ---------------------------------------------------------------------------
 # 2) Termes de recherche envoyés aux sources
 # ---------------------------------------------------------------------------
-# Requêtes larges : on préfère ratisser large et laisser le ranking trier.
-# Chaque terme est interrogé séparément puis les résultats sont fusionnés.
-TERMES_RECHERCHE = [
-    "stage intelligence artificielle",
-    "stage machine learning",
-    "stage cybersécurité",
-    "stage data science",
-    "internship AI security",
-]
+# Les termes vivent dans `recherche.yaml`, groupés par FAMILLE (ai_engineering,
+# ml, mlops, inference, cyber), et chaque source compose sa requête selon ce
+# que son moteur sait exprimer (cf. `recherche.py`). L'ancienne liste globale
+# `TERMES_RECHERCHE` — cinq phrases conjonctives envoyées telles quelles
+# partout — a disparu : « stage intelligence artificielle » exigeait les trois
+# mots chez Adzuna et France Travail, et rapportait 0.
 
 # Localisation (filtre "doux" côté API + filtre dur côté pipeline).
 LIEU = "Paris"
@@ -88,43 +85,49 @@ SOURCES_ACTIVES = [
 ]
 
 # --- Adzuna : construction de la requête ------------------------------------
-# Adzuna N'INTERROGE PAS `TERMES_RECHERCHE`, et c'est délibéré. Son paramètre
-# `what` est CONJONCTIF : il exige TOUS les mots. Or les termes de recherche
-# font 3 à 4 mots (« stage intelligence artificielle »), et aucune annonce
-# française ne les contient tous. Ablation mesurée le 2026-09-05, à Paris :
+# Le paramètre `what` d'Adzuna est CONJONCTIF : il exige TOUS les mots.
+# Ablation mesurée le 2026-09-05, à Paris :
 #
 #   what='stage intelligence artificielle' + fenêtre 7 j ....      0
 #   idem sans la fenêtre de fraîcheur .......................      4
 #   idem sans `where` .......................................     43
 #   what='stage' (trop large : tous domaines) ............... 1 276
 #
-# Les cinq termes réunis rapportaient 2 offres. La requête est donc reformulée
-# SANS changer ce qu'on demande — un stage, du domaine IA/data/cyber, à Paris :
+# La requête est donc, PAR FAMILLE :
 #
-#   title_only  le mot doit être DANS LE TITRE. C'est exactement ce que
-#               `filters.est_un_stage` exige ensuite : la requête et le filtre
-#               cessent de se contredire, et plus aucune offre ne meurt là.
-#   what_or     les termes de domaine en OU, au lieu d'un ET impossible.
+#   title_only  un mot de contrat DANS LE TITRE — ce que `filters.est_un_stage`
+#               exige ensuite : la requête et le filtre ne se contredisent pas.
+#   what_or     les MOTS des termes de la famille, en OU. Adzuna ne sait pas
+#               faire un OU de phrases : « machine learning » devient
+#               « machine » OU « learning ».
 #
-# Mesuré sur cette forme : 100 offres brutes rapatriées, 100 gardées par les
-# filtres durs (aucune perte), dont 17 portant un tag IA/cyber.
-ADZUNA_TITRE_EXIGE = "stage"
+# `title_only` n'accepte qu'un mot : une chaîne par mot de contrat. « stage »
+# couvre les annonces françaises, « internship » les annonces anglaises
+# publiées à Paris, fréquentes en IA.
+ADZUNA_TITRES_EXIGES = ["stage", "internship"]
 
-# Termes de domaine, en OU. Volontairement LARGES : le projet ratisse large et
-# laisse le ranking trier. Élargir ici fait entrer du bruit (finance, marketing,
-# juridique qui mentionnent « data »), que le cosinus et la vérification LLM
-# déclassent ensuite — c'est le compromis assumé du pipeline.
-ADZUNA_TERMES_DOMAINE = (
-    "intelligence artificielle machine learning deep learning cybersécurité "
-    "data science données sécurité"
-)
+# Mots retirés du `what_or` : trop génériques pour signifier une famille. Sans
+# eux, « ingénieur machine learning » ferait entrer « ingénieur », et toute
+# offre d'ingénieur porterait l'étiquette « ml ». « ia » / « ai » y sont aussi :
+# « sécurité de l'IA » (famille cyber) étiquetterait sinon cyber toutes les
+# offres d'IA, et « ai » attrape « j'ai ».
+ADZUNA_MOTS_IGNORES = [
+    "de", "du", "des", "la", "le", "les", "par", "of", "the", "and", "et",
+    "ia", "ai", "ingénieur", "engineer", "intelligence", "apprentissage",
+    "automatique", "traitement", "langage", "data", "science", "recherche",
+    "research", "applied", "computer", "plateforme", "platform",
+    "infrastructure", "optimisation", "optimization", "model", "sécurité",
+    "security",
+]
 
-# Nombre de pages Adzuna parcourues (RESULTATS_PAR_TERME offres par page).
-ADZUNA_PAGES = 4
+# Pages Adzuna par chaîne (famille × mot de contrat), RESULTATS_PAR_TERME
+# offres par page. 5 familles × 2 mots × 2 pages = 20 appels au pire ; une
+# famille étroite s'arrête dès la première page incomplète.
+ADZUNA_PAGES = 2
 
-# Careerjet : nombre de pages parcourues PAR TERME de recherche (30 offres par
-# page). 2 pages x 5 termes = jusqu'à 300 offres brutes, largement de quoi
-# alimenter les filtres sans faire traîner la collecte.
+# Careerjet : nombre de pages parcourues PAR FAMILLE (30 offres par page).
+# Careerjet comprend OU, guillemets et parenthèses (sondé le 2026-09-17) : une
+# requête par famille, « (stage OR internship …) ("machine learning" OR …) ».
 CAREERJET_PAGES = 2
 
 # Marché Careerjet interrogé (fr_FR = France, en français).
@@ -132,6 +135,46 @@ CAREERJET_LOCALE = "fr_FR"
 
 # Free-Work : nombre de pages de stages parcourues (le site en publie peu).
 FREE_WORK_PAGES = 2
+
+# --- France Travail : un appel par terme, en rotation ------------------------
+# `motsCles` est CONJONCTIF, virgule comme espace (sondé le 2026-09-17 :
+# vendeur 1 750, caissier 218, « vendeur,caissier » 8). Pas de OU possible :
+# un appel par terme distinct de recherche.yaml — 40 aujourd'hui.
+#
+# Nombre d'offres rapatriées par terme (plafond de l'API : 150 par appel).
+FRANCE_TRAVAIL_RESULTATS = 150
+
+# ROTATION. Les termes sont répartis en N tranches, et chaque run n'interroge
+# que la tranche la moins récemment interrogée. Le décompte qui la motive :
+#
+#   avant (5 termes globaux)   adzuna ≤4, france_travail 5, careerjet ≤10,
+#                              free_work ≤2, jobspy 15 ............. ≈ 36
+#   familles, sans rotation    adzuna ≤20, france_travail 40, careerjet ≤10,
+#                              free_work ≤2, jobspy 15 ............. ≈ 87
+#   familles, 2 tranches       france_travail 20 ................... ≈ 67
+#
+# 87 dépasse le double de 36 ; 2 tranches le ramènent sous ce double. France
+# Travail est la seule source concernée : c'est la seule sans OU.
+#
+# LE PRIX : un terme n'est interrogé qu'un run sur N. Sans perte tant que deux
+# runs consécutifs sont espacés de moins de JOURS_FRAICHEUR / N jours (3,5 j
+# à N = 2) — au-delà, une offre peut sortir de la fenêtre avant que sa
+# tranche repasse. Le module le signale dans les logs quand ça arrive.
+# 1 = pas de rotation.
+FRANCE_TRAVAIL_TRANCHES = 2
+
+# État de la rotation : date du dernier passage de chaque tranche. Artefact de
+# run, non versionné ; absent ou illisible = toutes les tranches à refaire.
+CHEMIN_ROTATION = Path(".rotation.json")
+
+# --- JobSpy : une requête par famille, en OU --------------------------------
+# Indeed et LinkedIn comprennent OU, guillemets et parenthèses (documenté par
+# JobSpy) : 3 sites × 5 familles = 15 appels, autant qu'avant avec 5 termes.
+# Une requête de famille ramène davantage qu'une requête de terme, d'où un
+# plafond par SITE : Indeed pagine sans se braquer, LinkedIn bloque vers la
+# 10e page par IP et va chercher la description de CHAQUE offre (un appel de
+# plus par résultat) — il reste donc au plafond d'avant.
+JOBSPY_RESULTATS_PAR_SITE = {"indeed": 100, "linkedin": 30, "google": 30}
 
 # ---------------------------------------------------------------------------
 # 2 ter) Métiers suivis par le tableau de bord marché (market.py)

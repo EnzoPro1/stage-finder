@@ -24,7 +24,8 @@ from dotenv import load_dotenv
 
 import config
 import observabilite
-from sources import masquer_secrets
+import recherche
+from sources import masquer_secrets, provenance
 
 load_dotenv()
 
@@ -74,7 +75,13 @@ def _chercher_un_terme(cle: str, terme: str) -> list[dict]:
 
 
 def recuperer_offres() -> list[dict]:
-    """Agrège les offres brutes Jooble sur tous les termes de recherche."""
+    """Agrège les offres brutes Jooble : un appel par terme distinct de recherche.yaml.
+
+    Source RETIRÉE de ``SOURCES_ACTIVES`` (elle résout « Paris » en Paris,
+    Texas) : ce chemin n'est exercé que par ``python -m sources.jooble``. Sa
+    grammaire de requête n'a pas été sondée, d'où la forme la plus prudente —
+    un terme par appel, préfixé du mot « stage ».
+    """
     cle = _cle_disponible()
     if not cle:
         observabilite.signaler(NOM_SOURCE, "cle_absente", "JOOBLE_API_KEY absente du .env")
@@ -82,9 +89,10 @@ def recuperer_offres() -> list[dict]:
         return []
 
     toutes: list[dict] = []
-    for terme in config.TERMES_RECHERCHE:
-        toutes.extend(_chercher_un_terme(cle, terme))
+    for t in recherche.charger().termes():
+        toutes.extend(provenance.marquer(_chercher_un_terme(cle, f"stage {t.terme}"), t.familles))
 
+    toutes = provenance.fusionner(toutes, lambda o: o.get("id") or o.get("link"))
     logger.info("Jooble : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 
