@@ -59,11 +59,14 @@ _SCOPE = "api_offresdemploiv2 o2dsoffre"
 # aval par filters.py.
 _REGION_IDF = "11"
 
-# Débit maximal imposé par France Travail : 10 appels/seconde. On garde une
-# marge (8/s) et on sérialise les appels du module derrière un verrou : la
-# collecte est parallélisée entre SOURCES, donc rien ne garantit sans ça qu'on
-# ne parte pas en rafale si un jour on paginait en parallèle.
-_INTERVALLE_MIN_S = 1 / 8
+# Débit maximal annoncé par France Travail : 10 appels/seconde. On sérialise
+# les appels du module derrière un verrou : la collecte est parallélisée entre
+# SOURCES, donc rien ne garantit sans ça qu'on ne parte pas en rafale.
+#
+# 4/s et non 8/s : le 2026-09-17, une salve de ~50 comptages à 8/s a pris un
+# HTTP 429. Le débit réellement toléré est plus bas que l'annonce, et les jobs
+# étudiants font 20 à 40 appels par run.
+_INTERVALLE_MIN_S = 1 / 4
 _verrou_debit = threading.Lock()
 _dernier_appel = 0.0
 

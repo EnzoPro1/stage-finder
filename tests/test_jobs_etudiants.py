@@ -70,7 +70,7 @@ def test_le_fichier_du_depot_porte_les_trois_origines_et_les_seize_termes():
     assert {(o.insee, o.code_postal) for o in j.origines.values()} == {
         ("77284", "77100"), ("91228", "91000"), ("93051", "93160")}
     assert len(j.termes) == 16 and "cours particuliers" in j.termes
-    assert j.rayon_km == 15
+    assert j.rayon_km == 30
 
 
 @pytest.mark.parametrize("terme, etiquette", [
@@ -207,35 +207,6 @@ def test_careerjet_jobs_une_requete_ou_par_origine(jobs, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Adzuna : code postal, rayon explicite, mots utiles
-# ---------------------------------------------------------------------------
-def test_adzuna_jobs_code_postal_rayon_et_troncature(jobs, monkeypatch):
-    from sources import adzuna
-
-    monkeypatch.setenv("ADZUNA_APP_ID", "x")
-    monkeypatch.setenv("ADZUNA_APP_KEY", "y")
-    monkeypatch.setattr(config, "ADZUNA_RESULTATS_PAR_PAGE_JOBS", 1)
-    monkeypatch.setattr(config, "ADZUNA_PAGES_JOBS", 1)
-    demandes = []
-
-    def faux_get(url, params, timeout):
-        demandes.append(dict(params))
-        return _Reponse({"count": 40, "results": [
-            {"id": f"a-{params['where']}", "title": "Hôte de caisse week-end", "description": ""}]})
-
-    monkeypatch.setattr(adzuna.requests, "get", faux_get)
-    r = observabilite.demarrer(["adzuna"])
-    offres = adzuna.recuperer_jobs_etudiants()
-
-    assert [(d["where"], d["distance"]) for d in demandes] == [("77100", 15), ("93160", 15)]
-    assert all(d["what_or"] == " ".join(config.ADZUNA_MOTS_JOBS) for d in demandes), \
-        "liste fermée de mots, pas les mots des termes"
-    assert all("part_time" not in d and "title_only" not in d for d in demandes)
-    assert provenance.familles_de(offres[0]) == ["hote_de_caisse", "week_end"]
-    assert "TRONQUÉE" in r.conseils["adzuna"]
-
-
-# ---------------------------------------------------------------------------
 # JobSpy : Indeed, par origine, rayon en miles
 # ---------------------------------------------------------------------------
 def test_jobspy_jobs_par_origine(jobs, monkeypatch):
@@ -247,7 +218,7 @@ def test_jobspy_jobs_par_origine(jobs, monkeypatch):
 
     def faux(site_name, search_term, location, **kw):
         appels.append((site_name[0], search_term, location, kw.get("distance"), kw.get("hours_old"),
-                       kw.get("job_type")))
+                       kw.get("job_type"), kw.get("results_wanted")))
         return pd.DataFrame([{"id": f"in-{location}", "title": "Serveur week-end", "job_url": "u",
                               "site": "indeed", "description": "Restaurant"}])
 
@@ -257,6 +228,8 @@ def test_jobspy_jobs_par_origine(jobs, monkeypatch):
     assert [a[2] for a in appels] == ["Meaux, France", "Noisy-le-Grand, France"]
     assert {a[3] for a in appels} == {10}, "15 km -> 10 miles, arrondi au-dessus"
     assert all(a[4] == config.JOURS_FRAICHEUR * 24 and a[5] is None for a in appels)
+    assert {a[6] for a in appels} == {config.JOBSPY_RESULTATS_PAR_SITE_JOBS["indeed"]}, \
+        "plafond propre aux jobs, pas celui des stages"
     assert all(provenance.familles_de(o) == ["week_end"] for o in offres)
 
 
@@ -321,7 +294,7 @@ def test_la_collecte_jobs_appelle_le_bon_point_d_entree_et_annonce_son_perimetre
                                recherche.ETIQUETTE_SANS_MOT_CLE}
     assert r.familles["vendeur"].brut == 1
     tete = observabilite.rendre_tableau(r).splitlines()[0]
-    assert tete.startswith("⊘ Source « free_work » désactivée pour les jobs étudiants")
+    assert tete.startswith("⊘ Source « adzuna » désactivée pour les jobs étudiants")
 
 
 def test_pipeline_jobs_bout_en_bout_sans_modele(jobs, monkeypatch, tmp_path):

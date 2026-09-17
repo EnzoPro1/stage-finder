@@ -54,12 +54,10 @@ class ConfigModel(BaseModel):
     SOURCES_ECARTEES_JOBS: dict[str, str]
     MOTS_CLES_ALTERNANCE: list[str] = Field(min_length=1)
     FRANCE_TRAVAIL_PAGES_JOBS: int = Field(ge=1, le=21)   # l'API s'arrête à l'index 3149
-    ADZUNA_PAGES_JOBS: int = Field(ge=1, le=20)
-    ADZUNA_RESULTATS_PAR_PAGE_JOBS: int = Field(ge=1, le=50)
-    ADZUNA_MOTS_JOBS: list[str] = Field(min_length=1)
     CAREERJET_PAGES_JOBS: int = Field(ge=1, le=20)
     CAREERJET_TAILLE_PAGE_JOBS: int = Field(ge=1, le=99)
     JOBSPY_SITES_JOBS: list[str] = Field(min_length=1)
+    JOBSPY_RESULTATS_PAR_SITE_JOBS: dict[str, int] = Field(min_length=1)
     ORS_ROUTES_MAX_PAR_APPEL: int = Field(ge=1, le=3500)
     ORS_APPELS_MAX_PAR_RUN: int = Field(ge=1, le=50)
     CHEMIN_CACHE_TRAJETS: Path
@@ -230,15 +228,7 @@ def valider_config() -> ConfigModel:
         if hasattr(config, nom)
     }
     modele = ConfigModel(**champs)
-    lue = recherche.lire(recherche.CHEMIN_RECHERCHE)
-    if lue.student_jobs:
-        termes = {t.casefold() for t in lue.student_jobs.termes}
-        etrangers = [m for m in modele.ADZUNA_MOTS_JOBS if m.casefold() not in termes]
-        if etrangers:
-            raise ValueError(
-                "ADZUNA_MOTS_JOBS contient des mots qui ne sont pas des termes de "
-                "student_jobs dans recherche.yaml : " + ", ".join(etrangers)
-            )
+    recherche.lire(recherche.CHEMIN_RECHERCHE)
     return modele
 
 

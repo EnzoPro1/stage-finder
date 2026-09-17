@@ -120,7 +120,7 @@ def _consoles_jobspy_au_niveau_erreur() -> None:
 
 
 def _scraper(site: str, requete: str, libelle: str, lieu: str | None = None,
-             rayon_km: int | None = None) -> list[dict]:
+             rayon_km: int | None = None, resultats: int | None = None) -> list[dict]:
     """Scrape UN site pour UNE requête. Retourne une liste de dicts (ou []).
 
     ``lieu`` vaut par défaut « Paris, France » (stages). ``rayon_km`` est
@@ -137,7 +137,7 @@ def _scraper(site: str, requete: str, libelle: str, lieu: str | None = None,
             search_term=requete,
             location=lieu or _LOCALISATION,
             **rayon,
-            results_wanted=config.JOBSPY_RESULTATS_PAR_SITE.get(
+            results_wanted=resultats or config.JOBSPY_RESULTATS_PAR_SITE.get(
                 site, config.RESULTATS_PAR_TERME),
             country_indeed="France",
             # Fraîcheur poussée côté source : offres des N derniers jours.
@@ -158,7 +158,7 @@ def _scraper(site: str, requete: str, libelle: str, lieu: str | None = None,
         observabilite.signaler(ligne(site), categorie, f"{message[:120]} sur « {libelle} »")
         logger.warning("JobSpy[%s] : %s (« %s »)", site, message, libelle)
         if blocage:
-            plafond = config.JOBSPY_RESULTATS_PAR_SITE.get(site, config.RESULTATS_PAR_TERME)
+            plafond = resultats or config.JOBSPY_RESULTATS_PAR_SITE.get(site, config.RESULTATS_PAR_TERME)
             observabilite.conseiller(
                 ligne(site),
                 f"« {ligne(site)} » a été BLOQUÉ (429) pendant ce run, résultats partiels. "
@@ -237,7 +237,8 @@ def recuperer_jobs_etudiants() -> list[dict]:
                 time.sleep(config.DELAI_ENTRE_REQUETES)
             premier_appel = False
             lot = _scraper(site, requete, f"jobs étudiants, {origine.libelle}",
-                           lieu=f"{origine.commune}, France", rayon_km=jobs.rayon_km)
+                           lieu=f"{origine.commune}, France", rayon_km=jobs.rayon_km,
+                           resultats=config.JOBSPY_RESULTATS_PAR_SITE_JOBS.get(site))
             toutes.extend(provenance.marquer_par_texte(lot, etiquettes, texte_brut))
 
     toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))

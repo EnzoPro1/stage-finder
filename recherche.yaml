@@ -79,11 +79,21 @@ familles:
 #   commune      Careerjet et Indeed, en toutes lettres
 student_jobs:
 
-  # Rayon autour de chaque origine, en km. Adzuna, temps partiel, 7 jours
-  # (sondé le 2026-09-17) : Meaux 164 / 498 / 1 899 à 10 / 15 / 25 km,
-  # Évry-Courcouronnes 38 / 94 / 519, Noisy-le-Grand 537 / 1 131 / 3 231.
-  # L'écart réel des offres rendues suit le rayon demandé (+1 à 4 km).
-  rayon_km: 15
+  # Rayon autour de chaque origine, en km, à VOL D'OISEAU (unité des API).
+  #
+  # Calibré le 2026-09-17 sur les temps de trajet réels (1 506 communes à
+  # moins de 60 km, routées par ORS) : part de la POPULATION joignable en
+  # moins de 45 min ajustées qui tombe dans le rayon —
+  #
+  #                          15 km   20 km   25 km   30 km   km route au bord
+  #   Meaux            45 %    80 %    99 %   100 %    35,6
+  #   Évry-Courcouronnes   26 %    49 %    81 %    95 %    27,9
+  #   ESIEE (Noisy-le-Grand)  38 %    82 %    94 %    98 %    37,2
+  #
+  # 30 km pour les trois : un rayon COMMUN laisse France Travail interroger
+  # les trois origines en un appel par terme. Ce que le rayon ramène au-delà
+  # du seuil est retiré par le filtre de trajet, pas par le rayon.
+  rayon_km: 30
 
   origines:
     ville_a:

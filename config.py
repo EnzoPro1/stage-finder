@@ -255,7 +255,6 @@ JOBSPY_RESULTATS_PAR_SITE = {"indeed": 300, "linkedin": 60}
 # (pas de fenêtre de date côté API), 3 pages lues sur 6 autour de Noisy.
 SOURCES_ACTIVES_JOBS = [
     "france_travail",
-    "adzuna",
     "careerjet",
     "jobspy",
 ]
@@ -263,6 +262,20 @@ SOURCES_ACTIVES_JOBS = [
 # Retirées volontairement des jobs étudiants, avec la raison — imprimées en
 # tête du bilan, comme pour les stages.
 SOURCES_ECARTEES_JOBS = {
+    # ADZUNA — gardée pour les stages. Deux formes de requête mesurées en réel
+    # le 2026-09-17 : `what_or` des mots des seize termes (81 % des offres
+    # gardées sans aucun terme, 6 135 annoncées autour de Noisy-le-Grand), puis
+    # une liste fermée de six mots sans ambiguïté (89 %). Cause sondée : Adzuna
+    # élargit par synonymie, même en `title_only` (« étudiant » -> « Apprenti
+    # élagueur » ; « vendeur » -> 697 « Conseiller commercial »). À 30 km :
+    # 11 326 / 3 561 / 18 608 offres annoncées par origine — rien qu'une
+    # pagination puisse couvrir. L'adaptateur « jobs étudiants » est retiré ;
+    # l'historique git le garde (commits e83e6b1, 40c3be3).
+    "adzuna": (
+        "élargit les mots-clés par synonymie, même dans le titre (« étudiant » -> "
+        "« Apprenti élagueur », « vendeur » -> « Conseiller commercial ») : 81 à "
+        "89 % des offres sans aucun terme recherché (2026-09-17)"
+    ),
     "free_work": (
         "job board tech/IT : ni recherche par lieu, ni mot-clé pris en compte "
         "côté serveur — rien à y chercher en jobs étudiants locaux"
@@ -296,38 +309,22 @@ MOTS_CLES_ALTERNANCE = [
 ]
 
 # France Travail : pages par requête (FRANCE_TRAVAIL_RESULTATS offres chacune).
-# Au-delà, un conseil « tronquée » est imprimé en tête du bilan.
-FRANCE_TRAVAIL_PAGES_JOBS = 4
+# Au-delà, un conseil « tronquée » est imprimé en tête du bilan. À 30 km
+# (2026-09-17), plus gros total annoncé : 693 (temps partiel sans mot-clé,
+# ESIEE) ; par terme, 504 (« vendeur », ESIEE). 5 pages = 750.
+FRANCE_TRAVAIL_PAGES_JOBS = 5
 
-# Adzuna : une requête par origine, `what_or` d'une liste FERMÉE de mots.
-ADZUNA_PAGES_JOBS = 3
-ADZUNA_RESULTATS_PAR_PAGE_JOBS = 50    # plafond de l'API
-# Adzuna ne sait pas faire de phrase. La première version découpait les seize
-# termes en mots et retirait les plus génériques : il restait « partiel »,
-# « caisse », « extra », « scolaire »… qui matchent n'importe quelle
-# description. Run réel du 2026-09-17 : 6 135 offres annoncées autour de
-# Noisy-le-Grand, et 270 des 335 gardées sans aucun terme (« Commercial
-# Immobilier »). On n'interroge donc plus que les termes d'UN mot qui ne
-# peuvent désigner qu'un job étudiant. Chaque mot doit être, tel quel, un
-# terme de recherche.yaml (vérifié par `valider_config`) : l'étiquette posée
-# par le texte correspond ainsi exactement à ce qui a été demandé.
-#
-# ÇA NE SUFFIT PAS — mesuré juste après, le 2026-09-17 : 348 bruts, 331 après
-# dédup, 295 sans terme retrouvé (89 %, contre 81 % avant). Noisy-le-Grand
-# annonce encore 3 856 offres. Cause, sondée : Adzuna ÉLARGIT les mots par
-# synonymie, même en `title_only` — `title_only=étudiant` rend « Apprenti
-# élagueur », « Apprenti auxiliaire de vie » ; `title_only=vendeur` rend 697
-# « Conseiller commercial ». Ses descriptions sont tronquées à 500 caractères
-# et ne contiennent pas le mot. Seul `title_only=serveur` est resté net (6).
-# Aucune formulation de requête ne contrôle cet élargissement.
-ADZUNA_MOTS_JOBS = ["vendeur", "serveur", "équipier", "animateur", "étudiant", "saisonnier"]
-
-# Careerjet : une requête OU par origine.
-CAREERJET_PAGES_JOBS = 3
+# Careerjet : une requête OU par origine. Pas de rayon côté API : pages
+# annoncées à 50 par page (2026-09-17) — Meaux 3, Évry 2, ESIEE 6.
+CAREERJET_PAGES_JOBS = 6
 CAREERJET_TAILLE_PAGE_JOBS = 50
 
 # JobSpy : sites interrogés pour les jobs étudiants, autour de chaque origine.
 JOBSPY_SITES_JOBS = ["indeed"]
+# Plafond de résultats par requête, par site. Indeed à 30 km (19 miles),
+# requête OU des seize termes, results_wanted=1000 (2026-09-17) : 998 / 726 /
+# 995 lignes, 6 à 10 s par origine — le plafond des stages (300) tronquait.
+JOBSPY_RESULTATS_PAR_SITE_JOBS = {"indeed": 1000}
 
 # --- Trajets (trajets.py) ----------------------------------------------------
 # OpenRouteService, clé ORS_API_KEY dans le .env. Seuil et facteurs : bloc

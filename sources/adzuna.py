@@ -167,65 +167,6 @@ def recuperer_offres() -> list[dict]:
     return toutes
 
 
-def texte_brut(item: dict) -> str:
-    """Titre et description d'une offre Adzuna, pour y retrouver les termes."""
-    return f"{item.get('title') or ''} {item.get('description') or ''}"
-
-
-def recuperer_jobs_etudiants() -> list[dict]:
-    """Jobs étudiants : UNE requête par origine, par code postal et rayon explicite.
-
-    - `where` = code postal : « Meaux » et « Évry-Courcouronnes »
-      rendent 0 offre, leurs codes postaux en rendent (sondé le 2026-09-17) ;
-    - `distance` = rayon de recherche.yaml ; sans lui, Adzuna prend 10 km ;
-    - `what_or` = ADZUNA_MOTS_JOBS, les seuls termes d'un mot sans ambiguïté :
-      Adzuna ne sait pas faire de OU de phrases, et les mots isolés des autres
-      termes (« partiel », « caisse », « extra ») ramenaient n'importe quoi ;
-    - pas de `part_time` : le filtre structuré n'est tenu pour fiable que chez
-      France Travail.
-
-    Chaque offre est étiquetée par les termes retrouvés — en PHRASE — dans son
-    titre et sa description. Si `count` dépasse ce que les pages lues ont
-    rapporté, un CONSEIL le dit en tête du bilan.
-    """
-    app_id, app_key = _cles_disponibles()
-    if not app_id or not app_key:
-        observabilite.signaler(NOM_SOURCE, "cle_absente",
-                               "ADZUNA_APP_ID / ADZUNA_APP_KEY absents du .env")
-        logger.warning("Adzuna ignorée : ADZUNA_APP_ID / ADZUNA_APP_KEY absents du .env.")
-        return []
-
-    jobs = recherche.charger().student_jobs
-    etiquettes = list(jobs.familles())
-    mots = config.ADZUNA_MOTS_JOBS
-    taille = config.ADZUNA_RESULTATS_PAR_PAGE_JOBS
-    toutes: list[dict] = []
-    for origine in jobs.origines.values():
-        lues, count = 0, None
-        for page in range(1, config.ADZUNA_PAGES_JOBS + 1):
-            specifiques = {"results_per_page": taille, "what_or": " ".join(mots),
-                           "where": origine.code_postal, "distance": jobs.rayon_km,
-                           "sort_by": "date"}
-            lot, count_page = _interroger(app_id, app_key, specifiques,
-                                          f"jobs étudiants, {origine.libelle} (page {page})", page)
-            count = count_page if count_page is not None else count
-            toutes.extend(provenance.marquer_par_texte(lot, etiquettes, texte_brut))
-            lues += len(lot)
-            if len(lot) < taille:
-                break
-        if count is not None and count > lues:
-            observabilite.conseiller(
-                NOM_SOURCE,
-                f"« {NOM_SOURCE} » TRONQUÉE autour de {origine.libelle} : {count} offres "
-                f"annoncées, {lues} rapatriées (ADZUNA_PAGES_JOBS = {config.ADZUNA_PAGES_JOBS} "
-                f"pages de {taille}).",
-            )
-
-    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
-    logger.info("Adzuna (jobs étudiants) : %d offre(s) brute(s).", len(toutes))
-    return toutes
-
-
 if __name__ == "__main__":
     # Test isolé de la source : affiche un petit récapitulatif lisible.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
