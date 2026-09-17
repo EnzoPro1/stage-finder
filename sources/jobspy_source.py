@@ -27,6 +27,7 @@ import pandas as pd
 import config
 import observabilite
 import recherche
+from normalize import cle_native
 from sources import provenance
 
 # L'import de jobspy peut être lourd ; on le protège pour un message clair.
@@ -111,7 +112,7 @@ def recuperer_offres() -> list[dict]:
             requete = recherche.requete_stage(famille.termes(), config.MOTS_CLES_STAGE)
             toutes.extend(provenance.marquer(_scraper(site, requete), [nom]))
 
-    toutes = provenance.fusionner(toutes, lambda o: o.get("id") or o.get("job_url"))
+    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("JobSpy : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 

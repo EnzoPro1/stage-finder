@@ -13,18 +13,43 @@ le bon convertisseur et ignore silencieusement les items non convertibles
 
 from __future__ import annotations
 
+import hashlib
 import html as html_module
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, asdict, field
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import recherche
 from sources.provenance import familles_de
 
 if TYPE_CHECKING:  # verdict typé sans import runtime (évite le cycle verifier<->normalize)
     from verifier import Verdict
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Lien:
+    """Une annonce chez UNE source : où elle est, et comment la reconnaître.
+
+    ``cle`` identifie l'annonce chez sa source d'un run à l'autre, et c'est
+    elle — jamais l'URL — qui décide qu'on a déjà vu ce lien. Trois formes,
+    de la plus sûre à la moins sûre (cf. ``cle_native``) :
+
+        id:<identifiant de la source>     adzuna, jobspy, free_work, france_travail, jooble
+        contenu:<empreinte>               careerjet, qui n'expose aucun identifiant
+        url:<URL normalisée>              repli, pour un item sans identifiant
+
+    ``url`` n'est que la DERNIÈRE adresse connue : elle peut changer à chaque
+    requête (Adzuna ajoute un jeton `se=`, Careerjet réchiffre l'URL entière).
+    """
+
+    source: str  # nom porté par l'offre : « adzuna », « jobspy:indeed »…
+    cle: str
+    url: str
 
 
 @dataclass
@@ -49,6 +74,15 @@ class Offre:
     # l'offre. PROVENANCE, pas classification : vide pour une source qui
     # n'interroge pas par terme (Free-Work filtre sur le type de contrat).
     familles: list[str] = field(default_factory=list)
+
+    # Parmi `familles`, celles dont un terme figure DANS LE TITRE normalisé.
+    # Une offre remontée par « LLM » dans sa description seulement porte la
+    # famille, pas la famille-titre. Aucune requête : comparaison de chaînes.
+    familles_titre: list[str] = field(default_factory=list)
+
+    # Toutes les annonces fusionnées dans cette offre, une par (source, clé).
+    # `url` et `source` ci-dessus restent ceux de la version la plus riche.
+    liens: list[Lien] = field(default_factory=list)
 
     # Signaux extraits par extract.py (colonnes filtrables). None/"" si illisibles.
     duree_mois: int | None = None      # durée du stage en mois
@@ -119,6 +153,82 @@ def _sans_html(valeur) -> str:
     texte = _MOTIF_BALISE.sub("", texte)
     texte = html_module.unescape(texte)
     return _MOTIF_ESPACES.sub(" ", texte).strip()
+
+
+# ---------------------------------------------------------------------------
+# Identité d'une annonce chez sa source
+# ---------------------------------------------------------------------------
+# Sondé le 2026-09-17, deux requêtes identiques par source :
+#
+#   adzuna          `id` stable ; URL différente pour 6 offres sur 28 (`se=`)
+#   careerjet       AUCUN identifiant ; URL différente pour 30 offres sur 30 —
+#                   l'URL entière est un jeton chiffré, rien n'y est stable
+#   free_work       `id` stable, URL stable
+#   france_travail  `id` stable, URL stable
+#   jobspy:indeed   `id` (« in-… ») stable, URL stable
+#   jobspy:linkedin `id` (« li-… ») stable, URL stable
+#   jooble          `id` — non sondé (source inactive)
+#
+# L'URL ne sert donc JAMAIS d'identité quand un identifiant existe. Careerjet
+# n'en a pas, et son URL ne se normalise pas (aucune partie stable) : il est
+# identifié par son CONTENU. Le repli par URL normalisée ne sert aujourd'hui à
+# aucune source active — il couvre un item qui arriverait sans identifiant.
+_CHAMP_IDENTIFIANT = {
+    "adzuna": "id",
+    "jooble": "id",
+    "jobspy": "id",
+    "france_travail": "id",
+    "free_work": "id",
+}
+
+# Careerjet : titre, entreprise, lieu, site d'origine. La date est EXCLUE :
+# elle peut être réécrite à une réindexation, ce qui créerait un second lien
+# pour la même annonce. Deux annonces identiques sur ces quatre champs sont un
+# doublon au sens de la dédup exacte de toute façon.
+_CHAMPS_CONTENU = {
+    "careerjet": ("title", "company", "locations", "site"),
+}
+
+# Paramètres de suivi retirés par le repli d'URL.
+_PARAMETRES_SUIVI = {"se", "v", "fbclid", "gclid", "ref", "refid", "src", "trk",
+                     "trackingid", "tracking_id"}
+
+
+def _forme_comparable(texte) -> str:
+    """Minuscules, sans accents, sans HTML ni ponctuation, espaces réduits."""
+    t = _sans_html(texte).casefold()
+    t = "".join(c for c in unicodedata.normalize("NFKD", t) if not unicodedata.combining(c))
+    return " ".join(re.findall(r"[^\W_]+", t))
+
+
+def url_normalisee(url: str) -> str:
+    """URL sans fragment ni paramètres de suivi, hôte en minuscules, paramètres triés."""
+    morceaux = urlsplit((url or "").strip())
+    parametres = sorted(
+        (k, v) for k, v in parse_qsl(morceaux.query, keep_blank_values=True)
+        if not k.lower().startswith("utm_") and k.lower() not in _PARAMETRES_SUIVI
+    )
+    return urlunsplit((morceaux.scheme.lower(), morceaux.netloc.lower(),
+                       morceaux.path.rstrip("/"), urlencode(parametres), ""))
+
+
+def cle_native(nom_source: str, brut: dict) -> str:
+    """Clé stable d'un item BRUT chez sa source, ou "" si la source n'en fournit pas.
+
+    Utilisée avant la normalisation (fusion des copies d'une même annonce
+    trouvée par deux requêtes, `sources/provenance.py`) comme après.
+    """
+    champ = _CHAMP_IDENTIFIANT.get(nom_source)
+    if champ:
+        valeur = brut.get(champ)
+        if valeur is not None and str(valeur).strip():
+            return f"id:{str(valeur).strip()}"
+    champs = _CHAMPS_CONTENU.get(nom_source)
+    if champs:
+        empreinte = "|".join(_forme_comparable(brut.get(c)) for c in champs)
+        if empreinte.strip("|"):
+            return "contenu:" + hashlib.sha1(empreinte.encode("utf-8")).hexdigest()
+    return ""
 
 
 def _salaire_depuis_bornes(mini, maxi, devise: str = "€") -> str:
@@ -284,6 +394,10 @@ def normaliser(nom_source: str, items: list[dict]) -> list[Offre]:
         # La provenance est portée par le dict brut (sources/provenance.py) et
         # recopiée ici, une fois, plutôt que dans chacun des normaliseurs.
         offre.familles = familles_de(item)
+        offre.familles_titre = recherche.familles_dans_titre(offre.title, offre.familles)
+        cle = cle_native(nom_source, item) or (
+            f"url:{url_normalisee(offre.url)}" if offre.url else "")
+        offre.liens = [Lien(offre.source, cle, offre.url)] if cle else []
         # On garde uniquement les offres a minima exploitables (titre + url).
         if offre.title and offre.url:
             offres.append(offre)

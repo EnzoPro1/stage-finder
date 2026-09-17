@@ -39,6 +39,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 
 import yaml
@@ -194,6 +195,35 @@ def mots_isoles(termes: list[str], ignores: list[str]) -> list[str]:
             if len(mot) > 1 and mot not in exclus and mot not in vus:
                 vus.append(mot)
     return vus
+
+
+def _forme_mots(texte: str) -> str:
+    """« Stage Machine-Learning (H/F) » -> « stage machine learning h f », bordé d'espaces.
+
+    Les espaces de bord font de la recherche de sous-chaîne une recherche de
+    MOTS ENTIERS : « llm » n'est pas trouvé dans « llmops ».
+    """
+    t = unicodedata.normalize("NFKD", (texte or "").casefold())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return " " + " ".join(re.findall(r"[^\W_]+", t)) + " "
+
+
+def familles_dans_titre(titre: str, familles: list[str]) -> list[str]:
+    """Parmi ``familles``, celles dont au moins un terme figure dans le titre.
+
+    Accents, casse et ponctuation ignorés, mots entiers. Une famille inconnue
+    du fichier (renommée depuis) n'est jamais retenue. Sans famille, le
+    fichier n'est pas lu.
+    """
+    if not familles:
+        return []
+    r = charger()
+    t = _forme_mots(titre)
+    return [
+        nom for nom in familles
+        if nom in r.familles
+        and any(_forme_mots(terme) in t for terme in r.familles[nom].termes())
+    ]
 
 
 def lire(chemin: str) -> Recherche:

@@ -8,6 +8,10 @@ Clé de dédoublonnage = hash de (titre normalisé + entreprise + ville).
 En cas de collision (= doublon), on garde la version la PLUS RICHE : celle qui
 apporte le plus d'information (description la plus longue, présence d'un salaire
 et d'une date). On préserve ainsi un maximum de contexte pour le ranking.
+
+La version écartée ne disparaît plus tout entière : ses LIENS (une annonce par
+source) et ses FAMILLES sont rattachés à la version gardée (``_absorber``).
+Avant, fusionner l'offre Adzuna dans l'offre Indeed supprimait l'URL Adzuna.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import numpy as np
 import communes
 import config
 import observabilite
+import recherche
 from normalize import Offre
 
 logger = logging.getLogger(__name__)
@@ -119,6 +124,23 @@ def _compter_fusions(avant: list[Offre], gardes_idx: list[int]) -> None:
             observabilite.signaler_fusion(offre.source)
 
 
+def _absorber(garde: Offre, doublon: Offre) -> None:
+    """Rattache à ``garde`` les liens et les familles de ``doublon``, qui va disparaître.
+
+    Un lien est identifié par (source, clé) — jamais par l'URL, qui change
+    d'une requête à l'autre chez Adzuna et Careerjet : la même annonce vue deux
+    fois reste UN lien. Les familles-titre sont recalculées sur le titre de la
+    version gardée, puisque c'est lui que le rapport affiche.
+    """
+    connus = {(l.source, l.cle) for l in garde.liens}
+    for lien in doublon.liens:
+        if (lien.source, lien.cle) not in connus:
+            garde.liens.append(lien)
+            connus.add((lien.source, lien.cle))
+    garde.familles = garde.familles + [f for f in doublon.familles if f not in garde.familles]
+    garde.familles_titre = recherche.familles_dans_titre(garde.title, garde.familles)
+
+
 def _richesse(offre: Offre) -> int:
     """Score de richesse d'une offre : plus c'est haut, plus l'offre est complète."""
     score = len(offre.description)
@@ -135,8 +157,13 @@ def dedupliquer(offres: list[Offre]) -> list[Offre]:
     for offre in offres:
         cle = _cle(offre)
         existante = meilleures.get(cle)
-        if existante is None or _richesse(offre) > _richesse(existante):
+        if existante is None:
             meilleures[cle] = offre
+        elif _richesse(offre) > _richesse(existante):
+            _absorber(offre, existante)
+            meilleures[cle] = offre
+        else:
+            _absorber(existante, offre)
 
     resultat = list(meilleures.values())
     # Même angle mort que la passe floue : la dédup exacte tourne elle aussi
@@ -246,8 +273,9 @@ def dedupliquer_flou(
     séparer ce que le vecteur ne contient pas.
 
     L'offre écartée est DÉTRUITE — elle n'atteint ni le ranking, ni la base, ni
-    les exports, et son URL est perdue. C'est ce qui justifie de faillir du côté
-    de la conservation.
+    les exports ; seuls ses liens et ses familles survivent, rattachés à
+    l'offre gardée. Son texte est perdu : c'est ce qui justifie de faillir du
+    côté de la conservation.
     """
     seuil = config.SEUIL_DEDUP_FLOU if seuil is None else seuil
     emb = np.asarray(embeddings)
@@ -274,11 +302,15 @@ def dedupliquer_flou(
         if doublon_de is None:
             gardes_idx.append(i)
             continue
-        # Doublon flou : on garde la version la plus riche des deux.
+        # Doublon flou : on garde la version la plus riche des deux, et elle
+        # emporte les liens et familles de l'autre.
         fusions += 1
         j = gardes_idx[doublon_de]
         if _richesse(offre) > _richesse(offres[j]):
+            _absorber(offre, offres[j])
             gardes_idx[doublon_de] = i
+        else:
+            _absorber(offres[j], offre)
 
     offres_gardees = [offres[i] for i in gardes_idx]
     emb_gardes = emb[gardes_idx] if gardes_idx else emb[:0]

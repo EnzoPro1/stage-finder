@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 import config
 import observabilite
 import recherche
+from normalize import cle_native
 from sources import masquer_secrets, provenance
 
 # Charge le .env dès l'import (idempotent).
@@ -148,7 +149,7 @@ def recuperer_offres() -> list[dict]:
                 if len(lot) < config.RESULTATS_PAR_TERME:
                     break
 
-    toutes = provenance.fusionner(toutes, lambda o: o.get("id") or o.get("redirect_url"))
+    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("Adzuna : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 

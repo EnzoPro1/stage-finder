@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 import config
 import observabilite
 import recherche
+from normalize import cle_native
 from sources import masquer_secrets, provenance
 
 load_dotenv()
@@ -92,7 +93,7 @@ def recuperer_offres() -> list[dict]:
     for t in recherche.charger().termes():
         toutes.extend(provenance.marquer(_chercher_un_terme(cle, f"stage {t.terme}"), t.familles))
 
-    toutes = provenance.fusionner(toutes, lambda o: o.get("id") or o.get("link"))
+    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("Jooble : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 

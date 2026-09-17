@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 import config
 import observabilite
 import recherche
+from normalize import cle_native
 from sources import masquer_secrets, provenance
 
 load_dotenv()
@@ -163,7 +164,11 @@ def recuperer_offres() -> list[dict]:
     vendeur 480, caissier 14, « vendeur OR caissier » 493). Une famille entière
     tient donc dans une requête, « (stage OR internship …) ("machine learning"
     OR NLP …) », au lieu d'un appel par terme. Une offre trouvée par deux
-    familles n'est rendue qu'une fois, avec les deux (identifiant : l'URL).
+    familles n'est rendue qu'une fois, avec les deux.
+
+    Careerjet n'expose AUCUN identifiant, et réchiffre l'URL entière à chaque
+    requête (30 offres sur 30 au sondage du 2026-09-17) : les copies sont
+    rapprochées par leur contenu (`normalize.cle_native`), pas par l'URL.
     """
     toutes: list[dict] = []
     for nom, famille in recherche.charger().familles.items():
@@ -178,7 +183,7 @@ def recuperer_offres() -> list[dict]:
                 break
         logger.info("Careerjet : %d offre(s) pour la famille « %s »", n_famille, nom)
 
-    toutes = provenance.fusionner(toutes, lambda o: o.get("url"))
+    toutes = provenance.fusionner(toutes, lambda o: cle_native(NOM_SOURCE, o))
     logger.info("Careerjet : %d offre(s) brute(s) au total.", len(toutes))
     return toutes
 

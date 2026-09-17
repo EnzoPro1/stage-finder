@@ -43,7 +43,7 @@ import storage
 import verifier
 import worker as worker_module
 from dedup import _cle as cle_identite
-from normalize import Offre
+from normalize import Lien, Offre
 from sources import RedactingFilter
 
 logger = logging.getLogger("job-finder.app")
@@ -114,6 +114,8 @@ def _charger_cache() -> None:
         )
         offre.tags = row.get("tags", [])
         offre.familles = row.get("familles", [])
+        offre.familles_titre = row.get("familles_titre", [])
+        offre.liens = [Lien(**l) for l in row.get("liens", [])]
         offre.duree_mois = row.get("duree_mois")
         offre.date_debut = row.get("date_debut", "")
         if row.get("verdict"):
@@ -162,6 +164,8 @@ def _row(offre: Offre, cos_score: float, cos_rang: int, inclure_desc: bool = Fal
         "duree_mois": offre.duree_mois, "date_debut": offre.date_debut,
         "tags": offre.tags,
         "familles": offre.familles,
+        "familles_titre": offre.familles_titre,
+        "liens": [{"source": l.source, "cle": l.cle, "url": l.url} for l in offre.liens],
         "verdict": verdict.to_dict() if verdict else None,
     }
     if inclure_desc:
