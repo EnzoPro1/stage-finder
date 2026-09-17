@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS offres (
     drapeaux     TEXT,   -- signalements non excluants (« alternance »)
     commune_trajet TEXT, -- jobs étudiants : code de la commune résolue
     trajets      TEXT,   -- jobs étudiants : JSON {origine: {brut_min, ajuste_min, …}}
+    premier_run  INTEGER, -- runs.id du run qui a créé la ligne comme NOUVELLE offre
+    dernier_run  INTEGER, -- runs.id du dernier run qui a vu la ligne
     dernier_score REAL,
     premiere_vue TEXT,   -- date ISO du premier run où l'offre est apparue
     derniere_vue TEXT,   -- date ISO du dernier run
@@ -95,7 +97,8 @@ CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     horodatage  TEXT,
     nb_offres   INTEGER,
-    nb_nouvelles INTEGER
+    nb_nouvelles INTEGER,
+    bilan       TEXT     -- JSON de observabilite.Releve.resume() : en-tête du rapport
 );
 
 -- Cache des verdicts de vérification LLM. Un verdict est calculé UNE seule fois
@@ -150,15 +153,20 @@ def ouvrir(chemin: str | None = None) -> sqlite3.Connection:
 
 # Colonnes ajoutées à `offres` après sa création. `CREATE TABLE IF NOT EXISTS`
 # ne touche pas une table existante : une base d'avant CP3 doit les recevoir.
-_COLONNES_AJOUTEES = (("familles", "TEXT"), ("familles_titre", "TEXT"), ("drapeaux", "TEXT"),
-                      ("commune_trajet", "TEXT"), ("trajets", "TEXT"))
+_COLONNES_AJOUTEES = {
+    "offres": (("familles", "TEXT"), ("familles_titre", "TEXT"), ("drapeaux", "TEXT"),
+               ("commune_trajet", "TEXT"), ("trajets", "TEXT"),
+               ("premier_run", "INTEGER"), ("dernier_run", "INTEGER")),
+    "runs": (("bilan", "TEXT"),),
+}
 
 
 def _ajouter_colonnes_manquantes(conn: sqlite3.Connection) -> None:
-    presentes = {ligne[1] for ligne in conn.execute("PRAGMA table_info(offres)")}
-    for nom, type_sql in _COLONNES_AJOUTEES:
-        if nom not in presentes:
-            conn.execute(f"ALTER TABLE offres ADD COLUMN {nom} {type_sql}")
+    for table, colonnes in _COLONNES_AJOUTEES.items():
+        presentes = {ligne[1] for ligne in conn.execute(f"PRAGMA table_info({table})")}
+        for nom, type_sql in colonnes:
+            if nom not in presentes:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {nom} {type_sql}")
 
 
 def liens_connus(conn: sqlite3.Connection) -> dict[tuple[str, str], str]:
@@ -184,7 +192,7 @@ def cles_connues(conn: sqlite3.Connection) -> set[str]:
 
 
 def enregistrer_run(
-    conn: sqlite3.Connection, classees: list[tuple[Offre, float]]
+    conn: sqlite3.Connection, classees: list[tuple[Offre, float]], bilan: dict | None = None
 ) -> set[str]:
     """Enregistre un run : upsert des offres, texte brut, trace dans `runs`.
 
@@ -194,6 +202,13 @@ def enregistrer_run(
     ancienne à laquelle l'un de ses liens, ou sa ligne, a été vu.
 
     Règle de nouveauté et traitement des liens : cf. l'en-tête du module.
+
+    ``bilan`` (``observabilite.Releve.resume()``) est gardé avec le run : le
+    rapport en tire son en-tête — offres par source et par famille, sources
+    muettes, écartées, conseils — sans dépendre du processus qui a collecté.
+    Chaque ligne d'offre retient le run qui l'a créée NOUVELLE (`premier_run`)
+    et le dernier qui l'a vue (`dernier_run`) : le rapport montre les offres du
+    dernier run, et « nouvelle » veut dire nouvelle À CE run.
 
     ## Pourquoi le TEXTE est écrit ICI
 
@@ -219,6 +234,13 @@ def enregistrer_run(
     premieres_vues = dict(conn.execute("SELECT cle, premiere_vue FROM offres").fetchall())
     liens_avant = liens_connus(conn)
     aujourd_hui = date.today().isoformat()
+    # Le run est posé EN PREMIER : son id est écrit sur chaque ligne. Ses
+    # compteurs sont complétés à la fin.
+    run_id = conn.execute(
+        "INSERT INTO runs (horodatage, nb_offres, nb_nouvelles, bilan) VALUES (?,?,?,?)",
+        (datetime.now().isoformat(timespec="seconds"), 0, 0,
+         json.dumps(bilan, ensure_ascii=False) if bilan is not None else None),
+    ).lastrowid
     nouvelles: set[str] = set()
     # Les textes sont accumulés puis écrits APRÈS le commit des offres.
     # `jobs.enregistrer_texte` ouvre sa propre transaction (`with conn:`) qui
@@ -260,14 +282,16 @@ def enregistrer_run(
                 """INSERT INTO offres
                    (cle, title, company, location, url, source, posted_at, salary,
                     duree_mois, date_debut, tags, familles, familles_titre, drapeaux,
-                    commune_trajet, trajets, dernier_score, premiere_vue, derniere_vue, nb_vues)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+                    commune_trajet, trajets, dernier_score, premiere_vue, derniere_vue,
+                    premier_run, dernier_run, nb_vues)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
                 (
                     cle, offre.title, offre.company, offre.location, offre.url,
                     offre.source, offre.posted_at, offre.salary, offre.duree_mois,
                     offre.date_debut, " ".join(offre.tags), familles, familles_titre,
                     " ".join(offre.drapeaux), offre.commune_trajet, trajets,
                     round(float(score), 4), offre.premiere_vue, aujourd_hui,
+                    run_id if est_nouvelle else None, run_id,
                 ),
             )
         else:
@@ -278,7 +302,7 @@ def enregistrer_run(
                    SET title=?, company=?, location=?, url=?, source=?, posted_at=?,
                        salary=?, duree_mois=?, date_debut=?, tags=?, familles=?,
                        familles_titre=?, drapeaux=?, commune_trajet=?, trajets=?,
-                       dernier_score=?,
+                       dernier_score=?, dernier_run=?,
                        derniere_vue=?,
                        nb_vues = nb_vues + (CASE WHEN derniere_vue <> ? THEN 1 ELSE 0 END)
                    WHERE cle=?""",
@@ -287,7 +311,7 @@ def enregistrer_run(
                     offre.source, offre.posted_at, offre.salary, offre.duree_mois,
                     offre.date_debut, " ".join(offre.tags), familles, familles_titre,
                     " ".join(offre.drapeaux), offre.commune_trajet, trajets,
-                    round(float(score), 4), aujourd_hui, aujourd_hui, cle,
+                    round(float(score), 4), run_id, aujourd_hui, aujourd_hui, cle,
                 ),
             )
 
@@ -305,10 +329,8 @@ def enregistrer_run(
                 (lien.source, lien.cle, cle, lien.url, aujourd_hui, aujourd_hui),
             )
 
-    conn.execute(
-        "INSERT INTO runs (horodatage, nb_offres, nb_nouvelles) VALUES (?,?,?)",
-        (datetime.now().isoformat(timespec="seconds"), len(classees), len(nouvelles)),
-    )
+    conn.execute("UPDATE runs SET nb_offres = ?, nb_nouvelles = ? WHERE id = ?",
+                 (len(classees), len(nouvelles), run_id))
     conn.commit()
 
     # Après le commit, donc : une interruption ici laisse des offres sans
@@ -323,6 +345,52 @@ def enregistrer_run(
         next((l[2] for l in conn.execute("PRAGMA database_list") if l[1] == "main"), "?"),
     )
     return nouvelles
+
+
+def dernier_run(conn: sqlite3.Connection) -> dict | None:
+    """Le run le plus récent — id, horodatage, compteurs, bilan désérialisé — ou None."""
+    ligne = conn.execute(
+        "SELECT id, horodatage, nb_offres, nb_nouvelles, bilan FROM runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if ligne is None:
+        return None
+    run = dict(ligne)
+    try:
+        run["bilan"] = json.loads(run["bilan"]) if run["bilan"] else None
+    except ValueError:
+        run["bilan"] = None
+    return run
+
+
+def offres_affichables(conn: sqlite3.Connection, run_id: int) -> list[dict]:
+    """Les lignes vues par le run ``run_id`` ET rattachées à au moins un lien.
+
+    Une ligne sans lien est un ORPHELIN : l'annonce a changé de titre, ses
+    liens ont été repointés vers la ligne de son nouveau titre. L'orphelin
+    n'est pas supprimé — la génération de CV et les textes s'y rattachent
+    peut-être —, il n'est simplement jamais montré.
+    """
+    lignes = [dict(l) for l in conn.execute(
+        """SELECT o.* FROM offres o
+           WHERE o.dernier_run = ?
+             AND EXISTS (SELECT 1 FROM offres_liens l WHERE l.cle_offre = o.cle)
+           ORDER BY o.dernier_score DESC, o.title""", (run_id,))]
+    if not lignes and not conn.execute(
+            "SELECT 1 FROM offres WHERE dernier_run = ? LIMIT 1", (run_id,)).fetchone():
+        # Run antérieur aux colonnes de run : aucune ligne ne porte son id. On
+        # retombe sur la DATE du run — les lignes vues ce jour-là — sans pouvoir
+        # dire lesquelles étaient nouvelles.
+        (horodatage,) = conn.execute("SELECT horodatage FROM runs WHERE id = ?",
+                                     (run_id,)).fetchone()
+        lignes = [dict(l) for l in conn.execute(
+            """SELECT o.* FROM offres o
+               WHERE o.derniere_vue = ?
+                 AND EXISTS (SELECT 1 FROM offres_liens l WHERE l.cle_offre = o.cle)
+               ORDER BY o.dernier_score DESC, o.title""", ((horodatage or "")[:10],))]
+    for ligne in lignes:
+        ligne["liens"] = liens_de(conn, ligne["cle"])
+        ligne["nouvelle"] = ligne.get("premier_run") == run_id
+    return lignes
 
 
 def filtrer_nouveautes(

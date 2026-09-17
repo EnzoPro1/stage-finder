@@ -12,6 +12,7 @@ __pycache__/
 # Sorties générées
 stages.csv
 stages.html
+flux.html
 
 # Artefacts de run — jamais versionnés.
 # `stages.db` contient des offres scrapées : elle ne doit pas partir dans un

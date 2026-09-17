@@ -35,6 +35,7 @@ import filters
 import main
 import observabilite
 import ranker
+import rapport
 import storage
 import trajets
 from normalize import Offre
@@ -84,8 +85,13 @@ def afficher_cli(offres: list[Offre]) -> None:
 
 
 def executer(utiliser_jobspy: bool = True, chemin_base=config.CHEMIN_BASE_JOBS,
-             calculateur: trajets.Calculateur | None = None) -> list[Offre]:
-    """Run complet des jobs étudiants. ``chemin_base=None`` : rien n'est persisté."""
+             calculateur: trajets.Calculateur | None = None,
+             chemin_rapport=config.CHEMIN_RAPPORT) -> list[Offre]:
+    """Run complet des jobs étudiants, puis rapport unifié.
+
+    ``chemin_base=None`` : rien n'est persisté, et le rapport n'est pas réécrit
+    (il se lit dans les bases).
+    """
     offres = collecter_et_dedupliquer(utiliser_jobspy, calculateur)
     tableau = observabilite.rendre_tableau()
     if tableau:
@@ -93,8 +99,11 @@ def executer(utiliser_jobspy: bool = True, chemin_base=config.CHEMIN_BASE_JOBS,
     if chemin_base is not None and offres:
         conn = storage.ouvrir(str(chemin_base))
         try:
-            storage.enregistrer_run(conn, [(o, 0.0) for o in offres])
+            releve = observabilite.actif()
+            storage.enregistrer_run(conn, [(o, 0.0) for o in offres],
+                                    bilan=releve.resume() if releve else None)
         finally:
             conn.close()
+        rapport.generer(config.CHEMIN_BASE, chemin_base, chemin_rapport)
     afficher_cli(offres)
     return offres

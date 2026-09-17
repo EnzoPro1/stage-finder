@@ -35,6 +35,7 @@ import dedup
 import extract
 import observabilite
 import ranker
+import rapport
 import report
 import storage
 import verifier
@@ -370,7 +371,8 @@ def executer(args: argparse.Namespace) -> None:
     if args.jobs_etudiants:
         import jobs_etudiants
         jobs_etudiants.executer(utiliser_jobspy=not args.no_jobspy,
-                                chemin_base=None if args.no_db else config.CHEMIN_BASE_JOBS)
+                                chemin_base=None if args.no_db else config.CHEMIN_BASE_JOBS,
+                                chemin_rapport=args.html)
         return
 
     # 1-6) Collecte -> ... -> Ranking cosinus (sans IA)
@@ -404,7 +406,9 @@ def executer(args: argparse.Namespace) -> None:
     # 7b) Persistance SQLite : enregistre le run complet, repère les nouveautés
     nouvelles: set[str] = set()
     if conn is not None:
-        nouvelles = storage.enregistrer_run(conn, classees)
+        releve = observabilite.actif()
+        nouvelles = storage.enregistrer_run(conn, classees,
+                                            bilan=releve.resume() if releve else None)
         for offre, _score in classees:
             offre.nouvelle = storage.cle_identite(offre) in nouvelles
         conn.close()
@@ -420,11 +424,15 @@ def executer(args: argparse.Namespace) -> None:
         logger.warning("Aucune offre à afficher après ranking/seuil.")
         return
 
-    # 9) Sorties
+    # 9) Sorties. Le rapport HTML est lu dans les BASES (stages + jobs
+    #    étudiants) : sans base, il n'a rien de ce run à montrer.
     afficher_cli(classees, args.limit)
     report.exporter_csv(classees, args.csv)
-    report.exporter_html(classees, args.html, config.REQUETE_REFERENCE)
-    print(f"Exports : {args.csv}  |  {args.html}\n")
+    if args.no_db:
+        print(f"Export : {args.csv}  (rapport HTML non réécrit : --no-db)\n")
+    else:
+        rapport.generer(args.db, config.CHEMIN_BASE_JOBS, args.html)
+        print(f"Exports : {args.csv}  |  {args.html}\n")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -438,7 +446,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--db", default=config.CHEMIN_BASE, help="Chemin de la base SQLite.")
     p.add_argument("--no-db", action="store_true", help="Ne pas lire/écrire la base SQLite.")
     p.add_argument("--csv", default="stages.csv", help="Chemin du fichier CSV de sortie.")
-    p.add_argument("--html", default="stages.html", help="Chemin du rapport HTML de sortie.")
+    p.add_argument("--html", default=str(config.CHEMIN_RAPPORT),
+                   help="Chemin du rapport HTML unifié (stages + jobs étudiants).")
     p.add_argument("--no-verify", action="store_true",
                    help="Désactive la vérification LLM (pipeline cosinus seul).")
     p.add_argument("--verify-model", default=None,

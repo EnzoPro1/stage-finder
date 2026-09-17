@@ -618,6 +618,10 @@ BONUS_DATE_DEBUT = 0.02
 # nouveautés), dédup dans le temps (offre republiée chaque lundi), historique.
 CHEMIN_BASE = "stages.db"
 
+# Rapport HTML UNIFIÉ (rapport.py) : stages et jobs étudiants, lus dans leurs
+# deux bases, au dernier run de chacune. Réécrit à la fin de chaque run.
+CHEMIN_RAPPORT = Path("flux.html")
+
 # ---------------------------------------------------------------------------
 # 8 bis) Génération de CV (cv_forge)
 # ---------------------------------------------------------------------------
