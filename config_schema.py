@@ -102,6 +102,7 @@ class ConfigModel(BaseModel):
 
     # --- Fraîcheur ---
     JOURS_FRAICHEUR: int = Field(gt=0, le=365)
+    SOURCES_SANS_FRAICHEUR: list[str]
     GARDER_SI_DATE_INCONNUE: bool
 
     # --- Dédup floue ---
@@ -141,7 +142,7 @@ class ConfigModel(BaseModel):
         # Accepte la liste de dicts telle qu'écrite dans config.py.
         return valeur
 
-    @field_validator("SOURCES_ACTIVES", "SOURCES_ACTIVES_JOBS")
+    @field_validator("SOURCES_ACTIVES", "SOURCES_ACTIVES_JOBS", "SOURCES_SANS_FRAICHEUR")
     @classmethod
     def _sources_connues(cls, valeur: list[str]) -> list[str]:
         """Refuse un nom de source absent du catalogue (faute de frappe = fail-fast)."""

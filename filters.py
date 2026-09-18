@@ -8,7 +8,8 @@ Quatre filtres :
 2) Ce n'est PAS une alternance/apprentissage ni un poste sénior : aucun
    mot-clé d'exclusion dans le titre.
 3) C'est bien en Île-de-France (et pas un "Paris" étranger type Paris, Texas).
-4) C'est récent : publié dans les N derniers jours (config.JOURS_FRAICHEUR).
+4) C'est récent : publié dans les N derniers jours (config.JOURS_FRAICHEUR),
+   sauf pour les pages carrières (config.SOURCES_SANS_FRAICHEUR).
 
 On NE filtre PAS sur la durée (6 mois) ni la date de début (janvier 2027) :
 ces infos sont souvent seulement en texte libre — on les laisse au ranking.
@@ -146,7 +147,8 @@ def filtrer(offres: list[Offre]) -> list[Offre]:
         if not est_en_idf(offre):
             rejeter(offre, "hors-IDF")
             continue
-        if not est_recente(offre):
+        # Pages carrières : postes ouverts par construction, pas de fenêtre.
+        if offre.source not in config.SOURCES_SANS_FRAICHEUR and not est_recente(offre):
             rejeter(offre, "trop-vieux")
             continue
         if releve is not None:

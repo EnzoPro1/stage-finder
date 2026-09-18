@@ -241,3 +241,21 @@ def test_l_age_de_chaque_offre_est_affiche_et_triable(tmp_path):
     assert 'data-age=""' in lignes["Sans date"] and 'class="num age">—</td>' in lignes["Sans date"]
     assert 'data-tri="age"' in page
 
+
+
+def test_l_age_des_stages_est_affiche_et_triable(tmp_path):
+    """Une page carrières gardée à 154 j doit se voir comme telle, et se trier."""
+    from datetime import date, timedelta
+
+    base = tmp_path / "stages.db"
+    vieille = _offre("Cybersecurity Intern", [("lever", "id:d025", "https://jobs.lever.co/p/d025")])
+    vieille.posted_at = (date.today() - timedelta(days=154)).isoformat()
+    _run(base, [vieille])
+
+    page = rapport.rendre(rapport.charger_section("Stages", base),
+                          rapport.Section("Jobs étudiants", None), {})
+    (ligne,) = _lignes_du_tableau(page, "table-stages")
+    assert 'data-age="154"' in ligne and ">154 j</td>" in ligne
+    corps_stages = page[page.index('id="stages"'):page.index('id="jobs"')]
+    assert 'data-tri="age"' in corps_stages
+    assert "sauf pages carrières (greenhouse, lever, ashby)" in corps_stages

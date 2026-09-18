@@ -241,3 +241,28 @@ def test_une_annonce_multi_sites_passe_le_filtre_ile_de_france_par_son_lieu_pref
     monkeypatch.setattr(ats.requests, "get", _faux_get([]))
     offres = normaliser("greenhouse", greenhouse.recuperer_offres())
     assert [o.title for o in filters.filtrer(offres)] == ["Stage - Data Scientist (x/f/m) - janvier 2027"]
+
+
+# ---------------------------------------------------------------------------
+# Fraîcheur : les pages carrières en sont exemptées
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("source, posted_at, garde", [
+    ("lever", "2025-11-08T00:00:00+00:00", True),        # 324 j : poste toujours ouvert
+    ("greenhouse", "", True),                            # date absente : gardée aussi
+    ("ashby", "2026-08-12T00:00:00+00:00", True),
+    ("careerjet", "2025-11-08T00:00:00+00:00", False),   # les autres sources restent à 7 j
+])
+def test_les_pages_carrieres_ignorent_la_fenetre_de_fraicheur(monkeypatch, source, posted_at, garde):
+    import config
+    from normalize import Offre
+
+    monkeypatch.setattr(config, "JOURS_FRAICHEUR", 7)
+    monkeypatch.setattr(config, "GARDER_SI_DATE_INCONNUE", False)
+    offre = Offre("Machine Learning Intern", "ACME", "Paris, France", "", "u", source, posted_at, "")
+    assert bool(filters.filtrer([offre])) is garde
+
+
+def test_la_config_reserve_l_exemption_aux_trois_plateformes():
+    import config
+
+    assert sorted(config.SOURCES_SANS_FRAICHEUR) == ["ashby", "greenhouse", "lever"]

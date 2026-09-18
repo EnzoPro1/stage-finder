@@ -194,9 +194,11 @@ def section_stages(section: Section, libelles: dict[str, str]) -> str:
                       f'{_e(libelles.get(f, f))}</button>' for f in familles)
     lignes = []
     for o in section.offres:
+        age = o.get("age_jours")
         lignes.append(
             f'<tr data-familles="{_e(" ".join(o["familles"]))}" '
-            f'data-familles-titre="{_e(" ".join(o["familles_titre"]))}">'
+            f'data-familles-titre="{_e(" ".join(o["familles_titre"]))}" '
+            f'data-age="{max(age, 0) if age is not None else ""}">'
             f'<td class="titre">{_neuf(o)}{_e(o["title"])}{_etiquettes_html(o, libelles)}</td>'
             f'<td>{_e(o["company"]) or "—"}</td><td>{_e(o["location"]) or "—"}</td>'
             f'<td class="liens">{_liens_html(o)}</td>'
@@ -206,13 +208,14 @@ def section_stages(section: Section, libelles: dict[str, str]) -> str:
 <section id="stages">
   <h2>Stages</h2>
   {entete(section, libelles)}
+  <p class="legende">Âge : jours depuis la publication de l'annonce, au jour du run. Fenêtre de {config.JOURS_FRAICHEUR} j, sauf pages carrières ({_e(", ".join(config.SOURCES_SANS_FRAICHEUR))}) : postes ouverts, gardés quel que soit leur âge.</p>
   <div class="outils" data-cible="table-stages">
     <input type="search" class="filtre-texte" placeholder="Filtrer (titre, employeur, lieu…)">
     <div class="familles"><button type="button" class="famille actif" data-famille="">toutes</button>{boutons}</div>
     <label><input type="checkbox" class="elargir"> inclure les familles absentes du titre</label>
   </div>
   <div class="defile"><table id="table-stages">
-    <thead><tr><th>Offre</th><th>Employeur</th><th>Lieu</th><th>Liens</th><th>Vue le</th><th>Âge</th><th>Score</th></tr></thead>
+    <thead><tr><th>Offre</th><th>Employeur</th><th>Lieu</th><th>Liens</th><th>Vue le</th><th><button type="button" class="tri" data-tri="age">Âge</button></th><th>Score</th></tr></thead>
     <tbody>{"".join(lignes)}</tbody>
   </table></div>
 </section>"""

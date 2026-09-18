@@ -571,6 +571,13 @@ COMBO_TOUJOURS_AFFICHE = True
 # On ne garde que les offres publiées dans les N derniers jours.
 JOURS_FRAICHEUR = 7
 
+# Sources EXEMPTÉES du filtre de fraîcheur des stages (date absente comprise).
+# Les pages carrières ne listent que les postes OUVERTS : une date ancienne dit
+# que le poste est affiché depuis longtemps, pas qu'il est pourvu. Le 2026-09-17,
+# la fenêtre de 7 j en rejetait 11 sur 36 (dont « Applied Science Intern »
+# chez Datadog, 9 j). L'âge reste affiché dans le rapport pour juger soi-même.
+SOURCES_SANS_FRAICHEUR = ["greenhouse", "lever", "ashby"]
+
 # Que faire d'une offre dont la date de publication est absente ou illisible ?
 #   False = on l'exclut (strict : "vraiment que du récent").
 #   True  = on la garde (permissif).
