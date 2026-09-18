@@ -19,6 +19,14 @@ Architecture (volontairement simple, mono-utilisateur, 100 % local) :
   - toute la logique métier est RÉUTILISÉE depuis main.py / verifier.py (aucune
     duplication) : ``main.collecter_et_classer`` et ``main.verifier_shortlist``.
 
+Deux onglets sur la même page, chacun avec sa propre recherche :
+  - **Stages** : le classement ci-dessus, avec tous les liens de chaque offre,
+    ses familles (filtrables), son âge et l'en-tête du dernier run ;
+  - **Jobs étudiants** : le pipeline `jobs_etudiants` (base séparée), rendu
+    par `rapport.rendre_jobs` — trajets par origine, tri, âge — dans un cadre.
+Une seule recherche à la fois : les deux collectes partagent le relevé
+d'observabilité (`observabilite.actif()`), qui mélangerait leurs bilans.
+
 Lancement :  python app.py   puis ouvrir http://localhost:5000
 """
 
@@ -36,9 +44,12 @@ from flask import Flask, g, jsonify, request, send_file, url_for
 
 import console  # noqa: F401 - force UTF-8 sur la console Windows
 import config
+import filters
 import jobs
 import main
 import market
+import observabilite
+import rapport
 import storage
 import verifier
 import worker as worker_module
@@ -68,6 +79,9 @@ ETAT: dict = {
     # Dernier tableau de bord marché calculé (market.py) + son horodatage.
     "marche": None,
     "marche_le": None,
+    # Recherche des jobs étudiants (onglet séparé, base séparée). Ses offres
+    # ne vivent PAS ici : l'onglet les relit dans jobs_etudiants.db.
+    "etudiants": {"en_cours": False, "debut": None, "fin": None, "n": None, "erreur": None},
 }
 
 # Durée de validité du tableau de bord marché. Les volumes d'offres bougent à
@@ -118,6 +132,7 @@ def _charger_cache() -> None:
         offre.liens = [Lien(**l) for l in row.get("liens", [])]
         offre.duree_mois = row.get("duree_mois")
         offre.date_debut = row.get("date_debut", "")
+        offre.nouvelle = row.get("nouvelle")
         if row.get("verdict"):
             offre.verdict = verifier.Verdict.from_dict(row["verdict"])
         classees.append((offre, float(row.get("cos_score", 0.0))))
@@ -167,6 +182,10 @@ def _row(offre: Offre, cos_score: float, cos_rang: int, inclure_desc: bool = Fal
         "familles_titre": offre.familles_titre,
         "liens": [{"source": l.source, "cle": l.cle, "url": l.url} for l in offre.liens],
         "verdict": verdict.to_dict() if verdict else None,
+        # Âge de l'annonce (jours depuis sa publication) et nouveauté au
+        # dernier run : ce que le rapport montre, montré ici aussi.
+        "age_jours": filters.age_jours(offre.posted_at),
+        "nouvelle": getattr(offre, "nouvelle", None),
     }
     if inclure_desc:
         row["description"] = offre.description
@@ -201,7 +220,11 @@ def _persister(classees: list[tuple[Offre, float]]) -> None:
         # disque plein) : la laisser hors du `try` referait tomber le thread
         # de collecte, ce que ce garde-fou existe précisément pour éviter.
         conn = storage.ouvrir(config.CHEMIN_BASE)
-        nouvelles = storage.enregistrer_run(conn, classees)
+        # Le bilan par source part avec le run, comme en CLI : sans lui,
+        # l'en-tête de l'onglet ne pourrait pas dire quelle source est muette.
+        releve = observabilite.actif()
+        nouvelles = storage.enregistrer_run(conn, classees,
+                                            bilan=releve.resume() if releve else None)
         for offre, _score in classees:
             offre.nouvelle = cle_identite(offre) in nouvelles
     except Exception as err:  # noqa: BLE001 - dégradation, pas d'écroulement
@@ -331,6 +354,8 @@ def api_etat():
             "collecte": dict(ETAT["collecte"]),
             "verif": dict(ETAT["verif"]),
             "auto": dict(ETAT["auto"]),
+            "etudiants": dict(ETAT["etudiants"]),
+            "libelles": rapport._libelles_familles(),
             "profil": config.REQUETE_REFERENCE,
             "top_n_defaut": config.VERIFY_TOP_N,
             "sources": config.SOURCES_ACTIVES,
@@ -341,7 +366,7 @@ def api_etat():
 def _tache_en_cours() -> bool:
     """Vrai si une tâche de fond occupe déjà le serveur (appel sous VERROU)."""
     return (ETAT["verif"]["en_cours"] or ETAT["collecte"]["en_cours"]
-            or ETAT["auto"]["en_cours"])
+            or ETAT["auto"]["en_cours"] or ETAT["etudiants"]["en_cours"])
 
 
 @app.post("/api/verifier")
@@ -437,6 +462,62 @@ def api_tout():
 
     threading.Thread(target=_thread_tout, args=(utiliser_jobspy, n), daemon=True).start()
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Onglets : en-tête du run de stages, et jobs étudiants
+# ---------------------------------------------------------------------------
+def _collecte_etudiants(utiliser_jobspy: bool) -> None:
+    """Run complet des jobs étudiants (collecte, trajets, dédup, base, rapport).
+
+    Même pipeline que ``main.py --jobs-etudiants`` : une seule implémentation.
+    Un échec est RAPPORTÉ à la page (``erreur``) au lieu de tuer le thread en
+    silence — un bouton qui revient sans rien dire ferait croire à un marché vide.
+    """
+    import jobs_etudiants
+
+    n, erreur = None, None
+    try:
+        n = len(jobs_etudiants.executer(utiliser_jobspy=utiliser_jobspy,
+                                        chemin_base=config.CHEMIN_BASE_JOBS))
+    except Exception as err:  # noqa: BLE001 - une collecte ratée ne doit pas tuer le serveur
+        logger.warning("Recherche jobs étudiants en échec : %s", err)
+        erreur = f"{type(err).__name__}: {err}"
+    finally:
+        with VERROU:
+            ETAT["etudiants"] = {"en_cours": False, "debut": None,
+                                 "fin": datetime.now().isoformat(timespec="seconds"),
+                                 "n": n, "erreur": erreur}
+
+
+@app.post("/api/etudiants/rechercher")
+def api_etudiants_rechercher():
+    """Lance la recherche des jobs étudiants en tâche de fond."""
+    with VERROU:
+        if _tache_en_cours():
+            return jsonify({"erreur": "Une tâche est déjà en cours."}), 409
+        ETAT["etudiants"] = {"en_cours": True,
+                             "debut": datetime.now().isoformat(timespec="seconds"),
+                             "fin": None, "n": None, "erreur": None}
+    utiliser_jobspy = not (request.get_json(silent=True) or {}).get("sans_indeed", False)
+    threading.Thread(target=_collecte_etudiants, args=(utiliser_jobspy,), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.get("/etudiants")
+def vue_etudiants():
+    """L'onglet Jobs étudiants : le dernier run de jobs_etudiants.db, rendu
+    comme dans le rapport (en-tête, trajets par origine, tri, âge)."""
+    section = rapport.charger_section("Jobs étudiants", config.CHEMIN_BASE_JOBS)
+    return rapport.rendre_jobs(section, rapport._origines())
+
+
+@app.get("/api/entete/stages")
+def api_entete_stages():
+    """En-tête du dernier run de stages : offres par source et par famille,
+    sources MUETTES, désactivées, alertes. Même bloc que le rapport."""
+    section = rapport.charger_section("Stages", config.CHEMIN_BASE)
+    return jsonify({"html": rapport.entete(section, rapport._libelles_familles())})
 
 
 # ===========================================================================
@@ -770,7 +851,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stage Finder — tri IA local</title>
+<title>Stage Finder</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -885,12 +966,67 @@ PAGE = r"""<!doctype html>
   .baisse { color: #dc2626; font-weight: 700; }
   .note { color: #777; font-size: .76rem; margin-top: .5rem; line-height: 1.5; }
   .pill { font-size: .72rem; padding: .1rem .5rem; border-radius: 999px; background: #ede9fe; color: #6d28d9; }
+  /* --- Onglets Stages / Jobs étudiants --------------------------------- */
+  .onglets { display: flex; gap: .4rem; margin: .4rem 0 1rem; border-bottom: 2px solid #e5e7eb; }
+  .onglets button { background: transparent; color: #374151; border-radius: 6px 6px 0 0;
+                    padding: .55rem 1.1rem; font-size: .95rem; margin-bottom: -2px;
+                    border-bottom: 2px solid transparent; }
+  .onglets button.actif { color: #1d4ed8; border-bottom-color: #1d4ed8; background: #fff; }
+  .onglets .compteur { font-weight: 500; color: #6b7280; font-size: .8rem; margin-left: .3rem; }
+  iframe.vue { width: 100%; height: calc(100vh - 12rem); min-height: 480px; border: 0;
+               background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  /* --- En-tête du dernier run (bloc rendu par rapport.entete) ---------- */
+  .entete-run { background: #fff; border-radius: 8px; padding: .6rem .9rem; margin-bottom: 1rem;
+                box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: .85rem; }
+  .entete-run p { margin: .2rem 0; }
+  .entete-run .alerte { background: #fff4ec; color: #9a3412; padding: .3rem .6rem; border-radius: 6px; }
+  .entete-run .ecartee, .entete-run .brut, .entete-run .cle { color: #6b7280; }
+  .entete-run .cle { margin-right: .4rem; }
+  .entete-run .zero { color: #9a3412; }
+  /* --- Liens, familles, âge -------------------------------------------- */
+  a.lien { display: inline-block; margin: 0 .25rem .25rem 0; padding: .05rem .45rem; border-radius: 4px;
+           background: #eef; color: #1d4ed8; text-decoration: none; font-size: .72rem; white-space: nowrap; }
+  a.lien:hover { text-decoration: underline; }
+  .fam { font-size: .66rem; padding: 0 .4rem; border-radius: 999px; border: 1px solid #d1d5db; color: #6b7280; }
+  .fam.titre { border-color: #1d4ed8; color: #1d4ed8; }
+  .familles { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
+  .familles button { background: #fff; color: #374151; border: 1px solid #d1d5db; border-radius: 999px;
+                     padding: .2rem .65rem; font-weight: 500; font-size: .8rem; }
+  .familles button.actif { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+  td.age { white-space: nowrap; color: #555; }
 </style>
 </head>
 <body>
   <h1>🎯 Stage Finder <span class="pill" id="modele">—</span></h1>
+
+  <nav class="onglets">
+    <button type="button" data-onglet="stages" onclick="ouvrirOnglet('stages')">🎓 Stages</button>
+    <button type="button" data-onglet="etudiants" onclick="ouvrirOnglet('etudiants')">🧑‍🍳 Jobs étudiants</button>
+  </nav>
+
+  <div class="barre-outils">
+    <div class="prog" id="prog" style="display:none">
+      <div class="bar"><span id="prog-bar"></span></div>
+      <div class="txt" id="prog-txt"></div>
+    </div>
+  </div>
+
+  <section id="onglet-etudiants" hidden>
+    <div class="barre-outils">
+      <button id="btn-etudiants" class="pri" onclick="chercherEtudiants()"
+              title="Collecte autour des 3 origines, temps de trajet, dédup, puis enregistrement dans jobs_etudiants.db.">
+        🔎 Chercher les jobs étudiants</button>
+      <label class="chk" title="Sans Indeed (scraping JobSpy) : France Travail et Careerjet seulement. Plus rapide, moins d'offres.">
+        <input type="checkbox" id="sans-indeed"> rapide (sans Indeed)</label>
+      <span class="meta" id="etudiants-statut" style="margin:0"></span>
+    </div>
+    <iframe class="vue" id="vue-etudiants" title="Jobs étudiants"></iframe>
+  </section>
+
+  <section id="onglet-stages">
   <div class="meta" id="meta">Chargement…</div>
   <div class="ref" id="ref"></div>
+  <div class="entete-run" id="entete-stages"></div>
 
   <div class="barre-outils">
     <button id="btn-tout" class="pri" onclick="toutLancer()"
@@ -899,11 +1035,16 @@ PAGE = r"""<!doctype html>
     <label>Vérifier les <input type="number" id="n" min="1" value="10"> premières</label>
     <button id="btn-verif" class="sec" onclick="lancerVerif()">🔎 Vérification IA seule</button>
     <button id="btn-refresh" class="sec" onclick="rafraichir()">🔄 Recherche seule</button>
-    <label class="chk" title="Interroge seulement les API rapides (Adzuna, Jooble, France Travail, Careerjet, Free-Work) sans scraper LinkedIn/Indeed : ~1 min au lieu de ~5, mais moins d'offres.">
+    <label class="chk" title="Interroge seulement les API (Adzuna, Careerjet, Free-Work, pages carrières) sans scraper LinkedIn/Indeed : plusieurs minutes de moins, mais moins d'offres.">
       <input type="checkbox" id="nojobspy"> rapide (sans JobSpy)</label>
     <span class="filtre"><input id="q" placeholder="🔎 filtrer (titre, entreprise…)" oninput="rendre()"></span>
     <label class="chk" title="Déplie l'analyse écrite par le LLM sous chaque offre vérifiée.">
       <input type="checkbox" id="tout-deplier" onchange="basculerTout(this.checked)"> déplier les analyses IA</label>
+  </div>
+  <div class="barre-outils">
+    <div class="familles" id="familles"></div>
+    <label class="chk" title="Par défaut, une famille ne retient que les offres qui la portent dans leur TITRE. Coché : aussi celles qui l'ont seulement dans la description ou par la requête qui les a trouvées.">
+      <input type="checkbox" id="elargir" onchange="rendre()"> inclure les familles absentes du titre</label>
   </div>
 
   <div class="marche" id="marche">
@@ -913,13 +1054,6 @@ PAGE = r"""<!doctype html>
       <button class="sec" id="btn-marche" onclick="chargerMarche(true)">Analyser</button>
     </div>
     <div id="marche-corps"></div>
-  </div>
-
-  <div class="barre-outils">
-    <div class="prog" id="prog" style="display:none">
-      <div class="bar"><span id="prog-bar"></span></div>
-      <div class="txt" id="prog-txt"></div>
-    </div>
   </div>
 
   <table id="tbl">
@@ -933,17 +1067,23 @@ PAGE = r"""<!doctype html>
         <th>Lieu</th>
         <th>Durée</th>
         <th>Début</th>
-        <th>Source</th>
+        <th class="rk" data-tri="age" data-libelle="âge" onclick="trier('age')" title="Jours depuis la publication de l'annonce (les plus récentes d'abord)">âge</th>
+        <th title="Un lien par source qui a publié l'offre">Liens</th>
         <th title="Génère un CV adapté à cette offre avec ton master.yaml">CV</th>
       </tr>
     </thead>
-    <tbody id="corps"><tr><td colspan="10" class="vide">Chargement…</td></tr></tbody>
+    <tbody id="corps"><tr><td colspan="11" class="vide">Chargement…</td></tr></tbody>
   </table>
+  </section>
 
 <script src="/static/cv_etats.js"></script>
 <script>
 let ETAT = null;
-let TRI = "cos";            // "cos" ou "ia"
+let TRI = "cos";            // "cos", "ia" ou "age"
+let FAMILLE = "";           // famille filtrée ("" = toutes)
+// Dernier état connu des deux recherches : c'est la FIN d'une recherche
+// (en_cours true -> false) qui déclenche le rechargement de son onglet.
+const AVANT = {collecte: false, etudiants: false};
 let sonde = null;           // timer de polling
 // URLs des offres dont l'analyse IA est dépliée. Indexé par URL (et pas par
 // rang) pour survivre à un re-tri ou à un rafraîchissement du classement.
@@ -957,6 +1097,11 @@ async function charger(essais){
     const r = await fetch("/api/etat", {cache: "no-store"});
     if (!r.ok) throw new Error("http "+r.status);
     ETAT = await r.json();
+    const collecte = ETAT.collecte.en_cours || (ETAT.auto && ETAT.auto.en_cours);
+    const etudiants = ETAT.etudiants && ETAT.etudiants.en_cours;
+    if (AVANT.collecte && !collecte) chargerEnteteStages();
+    if (AVANT.etudiants && !etudiants) rechargerEtudiants();
+    AVANT.collecte = collecte; AVANT.etudiants = etudiants;
     rendre();
     gererPolling();
   } catch(e){
@@ -968,7 +1113,8 @@ async function charger(essais){
 
 function gererPolling(){
   const actif = ETAT && (ETAT.verif.en_cours || ETAT.collecte.en_cours
-                         || (ETAT.auto && ETAT.auto.en_cours));
+                         || (ETAT.auto && ETAT.auto.en_cours)
+                         || (ETAT.etudiants && ETAT.etudiants.en_cours));
   majControles(actif);
   majProgression();
   if (actif && !sonde){ sonde = setInterval(charger, 1500); }
@@ -980,6 +1126,8 @@ function majControles(actif){
   document.getElementById("btn-verif").disabled = actif || !ETAT || !ETAT.n_total;
   document.getElementById("btn-refresh").disabled = actif;
   document.getElementById("n").disabled = actif;
+  document.getElementById("btn-etudiants").disabled = actif;
+  majStatutEtudiants();
 }
 
 function majProgression(){
@@ -990,6 +1138,13 @@ function majProgression(){
   // croit la tâche finie quand la collecte se termine, alors que l'IA démarre.
   const auto = ETAT && ETAT.auto && ETAT.auto.en_cours;
   const etape = auto ? `[étape ${ETAT.auto.etape}/2] ` : "";
+  if (ETAT && ETAT.etudiants && ETAT.etudiants.en_cours){
+    box.style.display = "block"; bar.style.width = "100%";
+    bar.parentElement.style.opacity = ".6";
+    txt.textContent = "🧑‍🍳 Recherche des jobs étudiants en cours (collecte, trajets, dédup)… "
+                    + "compter 5 à 10 minutes. Les stages restent consultables.";
+    return;
+  }
   if (ETAT && ETAT.collecte.en_cours){
     box.style.display = "block"; bar.style.width = "100%";
     bar.parentElement.style.opacity = ".6";
@@ -1018,10 +1173,73 @@ function trier(mode){
   TRI = mode;
   document.querySelectorAll("th[data-tri]").forEach(th => {
     th.classList.toggle("actif", th.dataset.tri === mode);
-    th.textContent = th.dataset.tri + (th.dataset.tri === mode ? " ▾" : "");
+    th.textContent = (th.dataset.libelle || th.dataset.tri) + (th.dataset.tri === mode ? " ▾" : "");
   });
   rendre();
 }
+
+// --- Onglets ------------------------------------------------------------------
+// L'onglet ouvert vit dans l'URL (#etudiants) : un rechargement y revient.
+function ouvrirOnglet(nom){
+  if (nom !== "etudiants") nom = "stages";
+  document.getElementById("onglet-stages").hidden = nom !== "stages";
+  document.getElementById("onglet-etudiants").hidden = nom !== "etudiants";
+  document.querySelectorAll(".onglets button").forEach(b =>
+    b.classList.toggle("actif", b.dataset.onglet === nom));
+  if (location.hash !== "#" + nom) history.replaceState(null, "", "#" + nom);
+  const cadre = document.getElementById("vue-etudiants");
+  if (nom === "etudiants" && !cadre.getAttribute("src")) rechargerEtudiants();
+}
+
+// --- En-tête du dernier run de stages (même bloc que le rapport) -------------
+async function chargerEnteteStages(){
+  try {
+    const r = await fetch("/api/entete/stages", {cache: "no-store"});
+    if (r.ok) document.getElementById("entete-stages").innerHTML = (await r.json()).html;
+  } catch(e){ /* en-tête indisponible : le tableau reste servi */ }
+}
+
+// --- Jobs étudiants -----------------------------------------------------------
+function rechargerEtudiants(){
+  document.getElementById("vue-etudiants").src = "/etudiants?t=" + Date.now();
+}
+
+function majStatutEtudiants(){
+  const e = ETAT && ETAT.etudiants;
+  const statut = document.getElementById("etudiants-statut");
+  if (!e) return;
+  if (e.en_cours) statut.textContent = "Recherche en cours depuis "
+      + new Date(e.debut).toLocaleTimeString('fr-FR') + "…";
+  else if (e.erreur) statut.textContent = "⚠️ Dernière recherche en échec : " + e.erreur;
+  else if (e.fin) statut.textContent = `Dernière recherche terminée à `
+      + `${new Date(e.fin).toLocaleTimeString('fr-FR')} : ${e.n} offre(s).`;
+  else statut.textContent = "";
+}
+
+async function chercherEtudiants(){
+  const rapide = document.getElementById("sans-indeed").checked;
+  if (!confirm("Recherche des jobs étudiants autour des 3 origines "
+               + (rapide ? "(sans Indeed) — quelques minutes." : "— compter 5 à 10 minutes.")
+               + "\nLes résultats remplaceront l'onglet à la fin. Continuer ?")) return;
+  const r = await fetch("/api/etudiants/rechercher", {method:"POST",
+                        headers:{"Content-Type":"application/json"},
+                        body: JSON.stringify({sans_indeed: rapide})});
+  if (!r.ok){ const j = await r.json(); alert(j.erreur||"Erreur"); return; }
+  charger();
+}
+
+// --- Familles (filtre des stages) --------------------------------------------
+function libelle(f){ return (ETAT && ETAT.libelles && ETAT.libelles[f]) || f; }
+
+function rendreFamilles(){
+  const noms = [...new Set(ETAT.offres.flatMap(o => o.familles || []))].sort();
+  if (FAMILLE && !noms.includes(FAMILLE)) FAMILLE = "";
+  document.getElementById("familles").innerHTML = ["", ...noms].map(f =>
+    `<button type="button" class="${f === FAMILLE ? 'actif' : ''}" data-famille="${esc(f)}"`
+    + ` onclick="choisirFamille(this.dataset.famille)">${f ? esc(libelle(f)) : 'toutes'}</button>`).join("");
+}
+
+function choisirFamille(f){ FAMILLE = f; rendre(); }
 
 function celluleDelta(o){
   if (o.ia_rang == null) return '<span class="delta-zero">—</span>';
@@ -1067,7 +1285,7 @@ function panneauAnalyse(o){
     ? `<div class="an-drapeaux"><strong>🚩 Points de vigilance</strong><ul>`
       + v.drapeaux_rouges.map(d => `<li>${esc(d)}</li>`).join("") + `</ul></div>`
     : "";
-  return `<tr class="analyse"><td colspan="10">
+  return `<tr class="analyse"><td colspan="11">
     <div class="an-titre">🤖 Analyse du LLM<span class="an-meta">${meta}</span></div>
     ${texte}${drapeaux}
   </td></tr>`;
@@ -1204,23 +1422,35 @@ function relancerSondeCV(){
 
 window.addEventListener("beforeunload", arreterSondeCV);
 
+function celluleLiens(o){
+  const liens = (o.liens && o.liens.length) ? o.liens : [{source: o.source, url: o.url}];
+  return liens.map(l =>
+    `<a class="lien" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.source)}</a>`).join("");
+}
+
 function ligne(o){
   const badges = (o.tags||[]).map(t =>
      `<span class="${t.includes('IA+CYBER')?'badge-combo':'badge'}">${esc(t)}</span>`).join(" ");
+  const titres = o.familles_titre || [];
+  const familles = (o.familles||[]).map(f =>
+     `<span class="fam${titres.includes(f)?' titre':''}">${esc(libelle(f))}</span>`).join("");
+  const neuf = o.nouvelle ? '<span class="delta-new">nouveau</span> ' : "";
   return `<tr>
     <td class="rk cos">${o.cos_rang}</td>
     <td class="rk ia">${o.ia_rang!=null?o.ia_rang:'<span class="delta-zero">—</span>'}</td>
     <td class="rk">${celluleDelta(o)}</td>
     <td>
-      <a class="titre" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.title)}</a>
+      ${neuf}<a class="titre" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.title)}</a>
       ${badges?`<div class="badges">${badges}</div>`:""}
+      ${familles?`<div class="badges">${familles}</div>`:""}
       ${verdictResume(o)}
     </td>
     <td>${esc(o.company)||'—'}</td>
     <td>${esc(o.location)||'—'}</td>
     <td>${o.duree_mois?o.duree_mois+' mois':'—'}</td>
     <td>${esc(o.date_debut)||'—'}</td>
-    <td><span class="src">${esc(o.source)}</span></td>
+    <td class="age">${o.age_jours!=null?Math.max(o.age_jours,0)+' j':'—'}</td>
+    <td>${celluleLiens(o)}</td>
     ${celluleCV(o)}
   </tr>` + panneauAnalyse(o);
 }
@@ -1238,12 +1468,22 @@ function rendre(){
   nInput.max = ETAT.n_total || 1;
   if (!nInput.dataset.touched) nInput.value = Math.min(ETAT.top_n_defaut||10, ETAT.n_total||10);
 
+  rendreFamilles();
+  document.querySelector('.onglets [data-onglet="stages"]').innerHTML =
+     `🎓 Stages <span class="compteur">${ETAT.n_total}</span>`;
+
   const q = (document.getElementById("q").value||"").toLowerCase();
   let offres = ETAT.offres.slice();
   if (TRI === "ia") offres.sort((a,b) => (a.ia_rang||1e9) - (b.ia_rang||1e9) || a.cos_rang - b.cos_rang);
+  else if (TRI === "age") offres.sort((a,b) => (a.age_jours ?? 1e9) - (b.age_jours ?? 1e9) || a.cos_rang - b.cos_rang);
   else offres.sort((a,b) => a.cos_rang - b.cos_rang);
   if (q) offres = offres.filter(o =>
-     (o.title+" "+o.company+" "+o.location+" "+o.source).toLowerCase().includes(q));
+     (o.title+" "+o.company+" "+o.location+" "+(o.liens||[]).map(l => l.source).join(" ")+" "+o.source)
+       .toLowerCase().includes(q));
+  if (FAMILLE){
+    const elargir = document.getElementById("elargir").checked;
+    offres = offres.filter(o => ((elargir ? o.familles : o.familles_titre) || []).includes(FAMILLE));
+  }
 
   // Mémorisé AVANT le rendu : c'est cette liste — les offres réellement
   // à l'écran, filtre appliqué — qui décide si le polling doit tourner.
@@ -1252,7 +1492,7 @@ function rendre(){
   const corps = document.getElementById("corps");
   corps.innerHTML = offres.length
     ? offres.map(ligne).join("")
-    : `<tr><td colspan="10" class="vide">${ETAT.n_total?"Aucune offre ne correspond au filtre.":"Aucun classement — clique « 🚀 Tout lancer »."}</td></tr>`;
+    : `<tr><td colspan="11" class="vide">${ETAT.n_total?"Aucune offre ne correspond au filtre.":"Aucun classement — clique « 🚀 Tout lancer »."}</td></tr>`;
 
   // Seul point de ré-armement du polling CV. `rendre` est appelé après
   // CHAQUE changement d'affichage — filtre, tri, retour de POST, tour de
@@ -1413,6 +1653,8 @@ document.getElementById("n").addEventListener("input", e => { e.target.dataset.t
 
 // L'état CV de TOUTES les offres en UN appel, avant le premier rendu :
 // une requête par ligne ferait 294 allers-retours à l'ouverture.
+ouvrirOnglet(location.hash.slice(1));
+chargerEnteteStages();
 chargerEtatsCV().then(charger);
 // Au chargement : on affiche le tableau de bord SI le serveur l'a déjà en
 // cache. Sans force=1, l'appel est instantané et ne consomme aucun quota.

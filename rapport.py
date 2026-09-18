@@ -380,6 +380,27 @@ def rendre(stages: Section, jobs: Section, origines: dict[str, str]) -> str:
 """
 
 
+def rendre_jobs(jobs: Section, origines: dict[str, str]) -> str:
+    """Page autonome de la SEULE section jobs étudiants : l'onglet de l'app web
+    (app.py) l'affiche dans un cadre, avec le même rendu que le rapport."""
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jobs étudiants</title>
+<style>{_STYLE} body {{ padding-top:0; }} h2 {{ margin-top:8px; }}</style>
+</head>
+<body>
+<main>
+  {section_jobs(jobs, _libelles_familles(), origines)}
+</main>
+<script>{_SCRIPT}</script>
+</body>
+</html>
+"""
+
+
 def _origines() -> dict[str, str]:
     try:
         jobs = recherche.charger().student_jobs
