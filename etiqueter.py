@@ -694,7 +694,9 @@ def main() -> None:
     args = p.parse_args()
 
     chemin_db = args.db or reference.base_par_defaut()
-    conn = storage.ouvrir(chemin_db)
+    # En écriture (table `etiquettes`), mais SANS migration : `storage.ouvrir`
+    # ajouterait à l'instantané des colonnes qui changent son empreinte.
+    conn = storage.ouvrir_sans_migration(chemin_db)
     ensure_schema(conn)
     try:
         # L'en-tête d'abord, toujours : étiqueter sur la base vive alors qu'une

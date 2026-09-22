@@ -297,6 +297,23 @@ def charger_manifeste(chemin: str = CHEMIN_MANIFESTE) -> dict | None:
         return None
 
 
+def est_instantane(chemin: str) -> bool:
+    """Vrai pour un instantané figé (``stages.reference-*.db``), pas la base vive."""
+    return os.path.basename(chemin).startswith(PREFIXE_INSTANTANE)
+
+
+def ouvrir_pour_mesure(chemin: str) -> sqlite3.Connection:
+    """Connexion LECTURE SEULE pour mesurer : immuable sur un instantané.
+
+    Tout outil de mesure passe par ici. ``storage.ouvrir`` écrirait dans la
+    base (journal WAL, schéma, colonnes ajoutées) — sur l'instantané, cela
+    changerait son empreinte, donc l'objet même qu'on prétend mesurer.
+    """
+    import storage
+
+    return storage.ouvrir_lecture_seule(chemin, immuable=est_instantane(chemin))
+
+
 def base_par_defaut(chemin_manifeste: str = CHEMIN_MANIFESTE) -> str:
     """La base sur laquelle mesurer : l'instantané s'il existe, sinon la vive.
 
@@ -474,7 +491,7 @@ def main() -> None:
         return
 
     chemin = args.db or base_par_defaut(args.manifeste)
-    conn = sqlite3.connect(chemin)
+    conn = ouvrir_pour_mesure(chemin)
     try:
         controle = controler(conn, chemin, args.manifeste)
     finally:

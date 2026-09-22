@@ -152,7 +152,7 @@ def ouvrir(chemin: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-def ouvrir_lecture_seule(chemin: str) -> sqlite3.Connection:
+def ouvrir_lecture_seule(chemin: str, *, immuable: bool = True) -> sqlite3.Connection:
     """Ouvre une base SANS jamais y écrire — pour mesurer sur un instantané.
 
     ``ouvrir`` ne convient pas : il pose ``journal_mode=WAL``, crée le schéma
@@ -166,12 +166,36 @@ def ouvrir_lecture_seule(chemin: str) -> sqlite3.Connection:
     tant que personne n'écrit la base pendant la lecture — la définition
     même d'un instantané figé. Lève si le fichier n'existe pas, au lieu de
     créer une base vide comme le ferait ``sqlite3.connect``.
+
+    ``immuable=False`` pour lire la base VIVE : l'app peut l'écrire pendant la
+    lecture, et ``immutable=1`` lirait alors un état incohérent (il ignore le
+    journal WAL). ``reference.ouvrir_pour_mesure`` choisit selon le chemin.
     """
     chemin_absolu = Path(chemin).resolve()
     if not chemin_absolu.is_file():
         raise FileNotFoundError(f"base introuvable : {chemin_absolu}")
-    conn = sqlite3.connect(f"file:{chemin_absolu.as_posix()}?mode=ro&immutable=1", uri=True)
+    options = "mode=ro&immutable=1" if immuable else "mode=ro"
+    conn = sqlite3.connect(f"file:{chemin_absolu.as_posix()}?{options}", uri=True)
     conn.row_factory = sqlite3.Row
+    return conn
+
+
+def ouvrir_sans_migration(chemin: str) -> sqlite3.Connection:
+    """Ouvre une base EXISTANTE en écriture, sans toucher à son schéma.
+
+    Pour l'étiquetage, qui écrit dans l'instantané de référence (table
+    ``etiquettes``, hors empreinte) par conception. ``ouvrir`` y ajouterait
+    les colonnes de ``_COLONNES_AJOUTEES`` que l'instantané, figé avant elles,
+    n'a pas : ``reference.empreinte_donnees`` hache les NOMS de colonnes, et
+    l'instantané deviendrait « non conforme » sans qu'une seule donnée ait
+    changé (constaté : 7 colonnes manquantes à l'instantané du 2026-08-12).
+    """
+    chemin_absolu = Path(chemin).resolve()
+    if not chemin_absolu.is_file():
+        raise FileNotFoundError(f"base introuvable : {chemin_absolu}")
+    conn = sqlite3.connect(chemin_absolu)
+    conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     return conn
 
 

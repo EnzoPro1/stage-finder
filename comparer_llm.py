@@ -16,7 +16,7 @@ modèle, et rend trois classements par modèle :
 
 ## Garanties
 
-- **Instantané en lecture seule** (``storage.ouvrir_lecture_seule``) : aucun
+- **Instantané en lecture seule** (``reference.ouvrir_pour_mesure``) : aucun
   octet écrit, aucune étiquette touchée.
 - **Aucun cache de verdicts** : chaque offre est réellement soumise au modèle.
   Le cache SQLite rendrait un temps nul et, surtout, des verdicts produits par
@@ -54,7 +54,6 @@ import evaluer_ranking
 import llm
 import ollama_pool
 import reference
-import storage
 import verifier
 from dedup import _cle as cle_identite
 
@@ -224,7 +223,7 @@ def main() -> None:
         raise SystemExit(llm.message_modeles_manquants(manquants))
 
     chemin_db = args.db or reference.base_par_defaut()
-    conn = storage.ouvrir_lecture_seule(chemin_db)
+    conn = reference.ouvrir_pour_mesure(chemin_db)
     try:
         controle = reference.controler(conn, chemin_db)
         corpus = evaluer_ranking.charger_corpus(conn, args.etiquettes)

@@ -122,6 +122,7 @@ def test_rapport_porte_verdicts_et_etiquettes(corpus):
 
 def test_n_utilise_jamais_la_base_en_ecriture(monkeypatch):
     """La porte d'entrée ouvre l'instantané en lecture seule, jamais via ouvrir()."""
+    import reference
     import storage
 
     def interdit(*a, **k):
@@ -135,7 +136,7 @@ def test_n_utilise_jamais_la_base_en_ecriture(monkeypatch):
     def lecture_seule(chemin):
         ouvertures.append(chemin)
         raise Arret
-    monkeypatch.setattr(storage, "ouvrir_lecture_seule", lecture_seule)
+    monkeypatch.setattr(reference, "ouvrir_pour_mesure", lecture_seule)
     monkeypatch.setattr(comparer_llm.llm, "modeles_manquants", lambda m: [])
     monkeypatch.setattr("sys.argv", ["comparer_llm.py", "--db", "instantane.db"])
     with pytest.raises(Arret):

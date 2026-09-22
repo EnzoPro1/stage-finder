@@ -90,7 +90,6 @@ import sys
 import config
 import etiqueter
 import reference
-import storage
 from dedup import _cle as cle_identite
 from normalize import Offre
 
@@ -403,7 +402,7 @@ def main() -> None:
     args = p.parse_args()
 
     chemin_db = args.db or reference.base_par_defaut()
-    conn = storage.ouvrir(chemin_db)
+    conn = reference.ouvrir_pour_mesure(chemin_db)
     try:
         rapport = construire_rapport(conn, args.etiquettes, args.k, args.annexe, chemin_db)
     finally:

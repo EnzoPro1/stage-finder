@@ -33,7 +33,6 @@ import config
 import etiqueter
 import evaluer_ranking
 import reference
-import storage
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +91,7 @@ def main() -> None:
 
     chemin_db = args.db or reference.base_par_defaut()
     # Lecture seule : `storage.ouvrir` écrirait dans l'instantané (WAL, schéma).
-    conn = storage.ouvrir_lecture_seule(chemin_db)
+    conn = reference.ouvrir_pour_mesure(chemin_db)
     try:
         corpus = evaluer_ranking.charger_corpus(conn, args.etiquettes)
     finally:
