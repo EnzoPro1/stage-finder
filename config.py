@@ -676,9 +676,13 @@ CV_OUT_ROOT = Path(r"C:\Users\toi\cv_forge\output\stages")
 #
 # Le profil recherché réutilise REQUETE_REFERENCE ci-dessus (pas de duplication).
 #
-# Prérequis :  ollama pull qwen3:8b   puis   ollama list
+# Prérequis :  ollama pull qwen3:4b   puis   ollama list
+#
+# Ces valeurs sont les DÉFAUTS. Les réglages effectivement utilisés sont ceux
+# de `llm.charger_reglages()`, qui les surcharge par variables d'environnement
+# (SF_LLM_MODEL, SF_LLM_TOP_N… — liste complète dans .env.example).
 VERIFY_ENABLED = True                          # couche active ? (--no-verify court-circuite)
-VERIFY_MODEL = "qwen3:1.7b"                     # tag Ollama du modèle de vérification (léger = rapide sur CPU)
+VERIFY_MODEL = "qwen3:4b"                       # tag Ollama du modèle de vérification (tient en VRAM 6 Go)
 VERIFY_OLLAMA_URL = "http://localhost:11434"    # serveur Ollama local
 VERIFY_TOP_N = 30                               # taille de la shortlist vérifiée
 VERIFY_TIMEOUT_S = 180                          # timeout (s) par appel LLM (large : 8B sur CPU ≈ 6 tok/s)
@@ -695,6 +699,31 @@ VERIFY_MAX_TOKENS = 500
 # sur une ligne mais n'explique rien ; 3 donnent un vrai avis lisible (domaine
 # du poste, adéquation durée/date, réserves) sans faire exploser la latence.
 VERIFY_JUSTIF_PHRASES = 3
+
+# Options d'inférence passées à Ollama à chaque appel (llm.py).
+#
+# LLM_NUM_CTX : fenêtre de contexte. Elle dimensionne le cache KV, alloué en
+# VRAM À LA CHARGE du modèle : qwen3:4b à 8192 tokens ≈ 2,5 Go de poids +
+# 1,2 Go de cache, ce qui tient sur une carte de 6 Go. La monter fait déborder
+# des couches sur le CPU, et la latence s'effondre sans aucun message d'erreur.
+#
+# LLM_KEEP_ALIVE : durée de résidence du modèle après un appel (syntaxe
+# Ollama : "10m", "30s", un nombre de secondes, -1 = indéfini). Elle garde le
+# modèle chaud d'une offre à la suivante ; le déchargement explicite en fin de
+# lot reste assuré par `ollama_pool.decharger`.
+#
+# LLM_NOUVELLES_TENTATIVES : nombre de NOUVELLES tentatives quand la sortie
+# structurée est illisible ou non conforme au schéma (0 = un seul essai).
+LLM_THINK = False
+LLM_TEMPERATURE = 0.0
+LLM_NUM_CTX = 8192
+LLM_KEEP_ALIVE = "10m"
+LLM_NOUVELLES_TENTATIVES = 2
+
+# Modèle d'embeddings servi par Ollama, pour le pré-filtrage (voir llm.embed).
+# Pas encore branché sur le classement : MiniLM (MODELE_EMBEDDING) reste le
+# défaut tant que bge-m3 n'a pas été mesuré au moins aussi bon sur l'instantané.
+LLM_MODELE_EMBEDDING = "bge-m3"
 
 # ---------------------------------------------------------------------------
 # 10) Divers

@@ -128,6 +128,12 @@ class ConfigModel(BaseModel):
     VERIFY_MIN_SCORE: float = Field(ge=0, le=1)
     VERIFY_MAX_TOKENS: int = Field(ge=120, le=4096)
     VERIFY_JUSTIF_PHRASES: int = Field(ge=1, le=8)
+    LLM_THINK: bool
+    LLM_TEMPERATURE: float = Field(ge=0, le=2)
+    LLM_NUM_CTX: int = Field(ge=512, le=131072)
+    LLM_KEEP_ALIVE: str | int
+    LLM_NOUVELLES_TENTATIVES: int = Field(ge=0, le=5)
+    LLM_MODELE_EMBEDDING: str = Field(min_length=1)
 
     # --- Persistance / réseau ---
     CHEMIN_BASE: str = Field(min_length=1)
