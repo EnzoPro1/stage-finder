@@ -78,6 +78,7 @@ class ConfigModel(BaseModel):
 
     # --- Modèle / embeddings ---
     MODELE_EMBEDDING: str = Field(min_length=1)
+    MODELE_EMBEDDING_DEDUP: str = Field(min_length=1)
     MAX_SEQ_LENGTH: int | None = Field(default=None)
     PREFIXE_REQUETE: str = ""
     PREFIXE_DOCUMENT: str = ""
@@ -137,6 +138,7 @@ class ConfigModel(BaseModel):
 
     # --- Persistance / réseau ---
     CHEMIN_BASE: str = Field(min_length=1)
+    CHEMIN_CACHE_EMBEDDINGS: Path
     CHEMIN_RAPPORT: Path
     TIMEOUT_HTTP: int = Field(gt=0, le=300)
     DELAI_ENTRE_REQUETES: float = Field(ge=0, le=60)

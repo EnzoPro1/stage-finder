@@ -56,7 +56,7 @@ def collecter_et_dedupliquer(utiliser_jobspy: bool = True,
     observabilite.journaliser()
     offres = dedup.dedupliquer(offres)
     if offres and config.DEDUP_FLOUE_ACTIVE:
-        embeddings = ranker.encoder_offres(offres)
+        embeddings = ranker.encoder_offres(offres, modele=config.MODELE_EMBEDDING_DEDUP)
         offres, _ = dedup.dedupliquer_flou(offres, embeddings)
     logger.info("Jobs étudiants : %d offre(s) après déduplication.", len(offres))
     return offres

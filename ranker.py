@@ -39,12 +39,49 @@ embeddings_env.activer_truststore()
 
 logger = logging.getLogger(__name__)
 
-# Le modèle est chargé paresseusement (au premier appel) et mémorisé.
+# Le modèle sentence-transformers est chargé paresseusement (au premier appel)
+# et mémorisé, avec son nom : demander un AUTRE modèle (benchmark, dédup sur
+# MiniLM pendant que le classement tourne sur un autre) le recharge.
 _modele = None
+_nom_modele: str | None = None
+
+# Préfixe d'un modèle servi par Ollama plutôt que par sentence-transformers.
+PREFIXE_OLLAMA = "ollama:"
 
 
-def _charger_modele():
-    """Charge (une fois) le modèle sentence-transformers et borne la troncature.
+def est_ollama(nom: str) -> bool:
+    return nom.startswith(PREFIXE_OLLAMA)
+
+
+class EncodeurOllama:
+    """Encodeur au même contrat que ``SentenceTransformer.encode``, via Ollama.
+
+    Les vecteurs passent par ``cache_embeddings`` : calculés une fois par
+    (modèle, texte), relus d'un run à l'autre. Pas de tokenizer local, donc
+    pas de diagnostic de troncature (``max_seq_length = None``) : bge-m3 lit
+    8192 tokens, et Ollama tronque au-delà (``truncate``).
+    """
+
+    max_seq_length = None
+
+    def __init__(self, nom: str) -> None:
+        self.nom = nom[len(PREFIXE_OLLAMA):] if est_ollama(nom) else nom
+
+    def encode(self, textes, normalize_embeddings: bool = False, **_ignores) -> np.ndarray:
+        import cache_embeddings
+
+        vecteurs = cache_embeddings.encoder(list(textes), self.nom)
+        if normalize_embeddings and len(vecteurs):
+            normes = np.linalg.norm(vecteurs, axis=1, keepdims=True)
+            vecteurs = vecteurs / np.where(normes == 0, 1.0, normes)
+        return vecteurs
+
+
+def _charger_modele(nom: str | None = None):
+    """Charge (une fois) le modèle d'embeddings et borne la troncature.
+
+    ``nom`` : défaut ``config.MODELE_EMBEDDING``. Un nom « ollama:… » rend un
+    ``EncodeurOllama`` — rien à charger ici, le modèle vit dans Ollama.
 
     ## Hors ligne : ici, et pas au démarrage de chaque exécutable
 
@@ -65,12 +102,15 @@ def _charger_modele():
     message réclamant un `HF_TOKEN`. Sur une machine sans réseau, le
     chargement ÉCHOUE alors que le modèle est en cache (constaté).
     """
-    global _modele
-    if _modele is None:
+    global _modele, _nom_modele
+    nom = nom or config.MODELE_EMBEDDING
+    if est_ollama(nom):
+        return EncodeurOllama(nom)
+    if _modele is None or _nom_modele != nom:
         # AVANT l'import : `preparer` ne peut plus rien pour une lib déjà
         # chargée (elle corrige la constante quand elle peut, mais mieux
         # vaut ne pas en dépendre).
-        etat = embeddings_env.preparer(config.MODELE_EMBEDDING)
+        etat = embeddings_env.preparer(nom)
         if not etat["hors_ligne"]:
             logger.info(
                 "Modèle absent du cache Hugging Face : téléchargement autorisé "
@@ -79,8 +119,9 @@ def _charger_modele():
         # Import tardif : évite de payer le coût de torch tant qu'on ne classe pas.
         from sentence_transformers import SentenceTransformer
 
-        logger.info("Chargement du modèle « %s »…", config.MODELE_EMBEDDING)
-        _modele = SentenceTransformer(config.MODELE_EMBEDDING)
+        logger.info("Chargement du modèle « %s »…", nom)
+        _modele = SentenceTransformer(nom)
+        _nom_modele = nom
         if config.MAX_SEQ_LENGTH is not None:
             # On fixe explicitement la fenêtre : sans ça, la troncature se fait en
             # silence à la valeur par défaut du modèle (souvent 128 tokens), et
@@ -88,6 +129,27 @@ def _charger_modele():
             _modele.max_seq_length = config.MAX_SEQ_LENGTH
         logger.info("Modèle chargé (max_seq_length = %s).", _modele.max_seq_length)
     return _modele
+
+
+def modeles_ollama_requis() -> list[str]:
+    """Modèles d'embeddings que le classement demandera à Ollama (check de démarrage)."""
+    noms = {config.MODELE_EMBEDDING, config.MODELE_EMBEDDING_DEDUP}
+    return sorted(EncodeurOllama(n).nom for n in noms if est_ollama(n))
+
+
+def liberer_modele(nom: str | None = None) -> None:
+    """Décharge d'Ollama le modèle d'embeddings, s'il y est servi.
+
+    Appelé entre le classement et la vérification LLM : sur 6 Go de VRAM,
+    bge-m3 et le modèle de génération tiennent ensemble de justesse. On
+    libère donc la place AVANT de charger le second. Sans effet pour un
+    modèle sentence-transformers (CPU, dans ce processus).
+    """
+    nom = nom or config.MODELE_EMBEDDING
+    if est_ollama(nom):
+        import ollama_pool
+
+        ollama_pool.decharger(EncodeurOllama(nom).nom)
 
 
 def _texte_a_encoder(offre: Offre) -> str:
@@ -189,13 +251,15 @@ def _profils_reference() -> list[dict]:
     return [{"texte": config.REQUETE_REFERENCE, "poids": 1.0}]
 
 
-def encoder_offres(offres: list[Offre]) -> np.ndarray:
+def encoder_offres(offres: list[Offre], modele: str | None = None) -> np.ndarray:
     """Encode les offres en embeddings NORMALISÉS (produit scalaire = cosinus).
 
     Exposé pour être réutilisé par la dédup floue (dedup.py) et l'évaluation
     (eval.py), afin de ne pas recalculer les embeddings plusieurs fois.
+    ``modele`` : défaut ``config.MODELE_EMBEDDING`` ; la dédup passe
+    ``config.MODELE_EMBEDDING_DEDUP``.
     """
-    modele = _charger_modele()
+    modele = _charger_modele(modele)
     textes = [_texte_a_encoder(o) for o in offres]
     _surveiller_troncature(modele, textes)
     return modele.encode(

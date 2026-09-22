@@ -454,7 +454,23 @@ MARQUEURS_ETRANGERS = [
 #   - "BAAI/bge-m3"                           : contexte 8k, multilingue solide.
 # Source de vérité au moment du test : leaderboard MTEB (onglets français /
 # retrieval), plutôt qu'un « gagnant » figé.
+#
+# Préfixe « ollama: » = modèle servi par Ollama (GPU) au lieu de
+# sentence-transformers (CPU), avec cache disque des vecteurs
+# (cache_embeddings.py) : « ollama:bge-m3 ». À ne passer en défaut qu'après
+# mesure sur l'instantané (benchmark.py) : au moins aussi bon en P@10 ET nDCG@10.
 MODELE_EMBEDDING = "paraphrase-multilingual-MiniLM-L12-v2"
+
+# Modèle de la DÉDUPLICATION FLOUE, distinct de celui du classement. Le seuil
+# SEUIL_DEDUP_FLOU (0,90) a été calibré sur les cosinus de MiniLM : un autre
+# modèle distribue ses similarités autrement, et le même seuil y fusionnerait
+# (ou raterait) d'autres paires. Changer MODELE_EMBEDDING ne doit donc PAS
+# changer la dédup. Quand les deux sont égaux, les vecteurs sont calculés une
+# seule fois et partagés.
+MODELE_EMBEDDING_DEDUP = "paraphrase-multilingual-MiniLM-L12-v2"
+
+# Cache disque des embeddings servis par Ollama (voir cache_embeddings.py).
+CHEMIN_CACHE_EMBEDDINGS = Path("embeddings_cache.db")
 
 # Longueur maximale de séquence (en tokens) imposée au modèle. Les descriptions
 # longues sont TRONQUÉES au-delà : sans borne explicite, la troncature se fait en

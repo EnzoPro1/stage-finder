@@ -20,6 +20,7 @@ Utilisation :
     python benchmark.py                       # modèles par défaut
     python benchmark.py --k 10 \
         --modeles paraphrase-multilingual-MiniLM-L12-v2 intfloat/multilingual-e5-large
+    python benchmark.py --modeles paraphrase-multilingual-MiniLM-L12-v2 ollama:bge-m3
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ MODELES_DEFAUT = [
     "paraphrase-multilingual-MiniLM-L12-v2",
     "intfloat/multilingual-e5-large",
     # "BAAI/bge-m3",  # décommenter si tu acceptes le téléchargement (~2 Go) et la RAM.
+    # "ollama:bge-m3",  # bge-m3 servi par Ollama (GPU), vecteurs mis en cache.
 ]
 
 
@@ -52,6 +54,8 @@ def _reinitialiser_modele() -> None:
 
 def comparer(modeles: list[str], corpus: dict, k: int) -> list[dict]:
     """Évalue chaque modèle sur le MÊME corpus déjà chargé, et rend les résultats."""
+    import ranker
+
     resultats = []
     modele_initial = config.MODELE_EMBEDDING
     try:
@@ -68,6 +72,7 @@ def comparer(modeles: list[str], corpus: dict, k: int) -> list[dict]:
             mesures["modele"] = nom
             mesures["secondes"] = round(time.perf_counter() - debut, 1)
             resultats.append(mesures)
+            ranker.liberer_modele(nom)  # rend la VRAM avant le modèle suivant
     finally:
         config.MODELE_EMBEDDING = modele_initial
         _reinitialiser_modele()

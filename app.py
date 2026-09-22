@@ -1739,7 +1739,8 @@ if __name__ == "__main__":
     _charger_cache()
     # Réglages LLM invalides : arrêt ici (ReglagesInvalides nomme la variable).
     # Ollama absent ou modèle manquant : simple avertissement, avec la commande.
-    avertissement = llm.diagnostic_demarrage()
+    avertissement = llm.diagnostic_demarrage(
+        [_reglages_llm().modele, *main.ranker.modeles_ollama_requis()])
     if avertissement:
         logger.warning(avertissement)
     demarrer_worker()

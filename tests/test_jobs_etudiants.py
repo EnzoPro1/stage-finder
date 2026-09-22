@@ -312,7 +312,7 @@ def test_pipeline_jobs_bout_en_bout_sans_modele(jobs, monkeypatch, tmp_path):
     monkeypatch.setattr(main.registry, "sources_actives",
                         lambda noms: [_SourceFactice("careerjet", brut)])
     monkeypatch.setattr(jobs_etudiants.ranker, "encoder_offres",
-                        lambda offres: np.eye(len(offres)))
+                        lambda offres, modele=None: np.eye(len(offres)))
 
     import trajets
 

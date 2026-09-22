@@ -35,6 +35,7 @@ import dedup
 import extract
 import llm
 import observabilite
+import ollama_pool
 import ranker
 import rapport
 import report
@@ -267,12 +268,20 @@ def collecter_et_classer(utiliser_jobspy: bool) -> list[tuple[Offre, float]]:
         logger.warning("Aucune offre après déduplication.")
         return []
 
-    # Embeddings calculés UNE fois, réutilisés par la dédup floue ET le ranking.
-    embeddings = ranker.encoder_offres(offres)
+    # La dédup floue a SON modèle (seuil calibré sur MiniLM) ; le classement,
+    # le sien. Même modèle : vecteurs calculés UNE fois et partagés.
+    embeddings = None
     if config.DEDUP_FLOUE_ACTIVE:
+        embeddings = ranker.encoder_offres(offres, modele=config.MODELE_EMBEDDING_DEDUP)
         offres, embeddings = dedup.dedupliquer_flou(offres, embeddings)
+    if config.MODELE_EMBEDDING != config.MODELE_EMBEDDING_DEDUP:
+        embeddings = None
 
-    return ranker.classer(offres, embeddings=embeddings)
+    classees = ranker.classer(offres, embeddings=embeddings)
+    # Enchaînement VRAM : le modèle d'embeddings (s'il est servi par Ollama)
+    # quitte le GPU AVANT que la vérification n'y charge le LLM.
+    ranker.liberer_modele()
+    return classees
 
 
 def verifier_shortlist(
@@ -347,6 +356,11 @@ def verifier_shortlist(
                 "cache": nb_cache, "appels": nb_appels, "echecs": nb_echecs,
             })
 
+    # Fin de lot : le modèle, gardé chaud d'une offre à l'autre par keep_alive,
+    # rend la VRAM maintenant plutôt qu'à l'expiration du délai.
+    if nb_appels:
+        ollama_pool.decharger(model, url=url)
+
     fusion = verifiees + reste
     fusion.sort(key=lambda couple: couple[1], reverse=True)
     if on_progress:
@@ -412,7 +426,8 @@ def executer(args: argparse.Namespace) -> None:
     verification = config.VERIFY_ENABLED and not args.no_verify
     if verification:
         avertissement = llm.diagnostic_demarrage(
-            [args.verify_model or reglages.modele], reglages)
+            [args.verify_model or reglages.modele, *ranker.modeles_ollama_requis()],
+            reglages)
         if avertissement:
             logger.warning(avertissement)
 

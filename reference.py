@@ -84,6 +84,7 @@ PREFIXE_INSTANTANE = "stages.reference-"
 #   - recherche.yaml, SOURCES_ACTIVES : collecte seule.
 CONSTANTES_RANKING = (
     "config.MODELE_EMBEDDING",
+    "config.MODELE_EMBEDDING_DEDUP",
     "config.MAX_SEQ_LENGTH",
     "config.PREFIXE_REQUETE",
     "config.PREFIXE_DOCUMENT",

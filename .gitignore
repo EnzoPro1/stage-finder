@@ -50,6 +50,9 @@ stages.avant-*.db
 stages.reference-*.db
 .reference.json.tmp
 .rank_cache.json
+# Cache des embeddings Ollama (`cache_embeddings.py`) : régénérable, et il
+# contient des empreintes de textes d'offres scrapées.
+embeddings_cache.db
 .rome_cache.json
 # Temporaire de l'écriture atomique de `etiqueter.exporter_json`. Le fichier
 # final (`etiquettes.json`) est LUI versionné : c'est le corpus étiqueté, la
