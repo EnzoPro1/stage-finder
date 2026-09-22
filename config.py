@@ -459,9 +459,13 @@ MARQUEURS_ETRANGERS = [
 # sentence-transformers (CPU), avec cache disque des vecteurs
 # (cache_embeddings.py) : « ollama:bge-m3 ».
 #
-# À ne passer en défaut qu'après mesure sur l'instantané (benchmark.py) : au
-# moins aussi bon en P@10 ET nDCG@10.
-MODELE_EMBEDDING = "paraphrase-multilingual-MiniLM-L12-v2"
+# Mesuré le 2026-09-22 sur l'instantané de référence (57 offres étiquetées,
+# 20 pertinentes, benchmark.py) :
+#   MiniLM-L12-v2 .... P@10 0,6   nDCG@10 0,690   rang médian 19,5
+#   bge-m3 (Ollama) .. P@10 0,8   nDCG@10 0,852   rang médian 13,5
+# Si Ollama ou le modèle manque, le classement retombe sur
+# MODELE_EMBEDDING_REPLI, et le run enregistre le modèle qui a servi.
+MODELE_EMBEDDING = "ollama:bge-m3"
 
 # Modèle de REPLI du classement quand MODELE_EMBEDDING est servi par Ollama et
 # qu'Ollama ne répond pas, ou que le modèle manque : le run se classe quand même,
