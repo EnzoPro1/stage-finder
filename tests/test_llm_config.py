@@ -22,7 +22,6 @@ def test_defauts_attendus():
     assert r.num_ctx == 8192
     assert r.top_n == 30
     assert r.keep_alive == "10m"
-    assert r.modele_embedding == "bge-m3"
 
 
 def test_les_defauts_viennent_de_config(monkeypatch):
@@ -44,7 +43,6 @@ def test_chaque_champ_a_sa_variable():
     ("SF_LLM_TEMPERATURE", "0.2", "temperature", 0.2),
     ("SF_LLM_TOP_N", "12", "top_n", 12),
     ("SF_LLM_KEEP_ALIVE", "30m", "keep_alive", "30m"),
-    ("SF_EMBED_MODEL", "nomic-embed-text", "modele_embedding", "nomic-embed-text"),
     ("SF_OLLAMA_URL", "http://gpu:11434/", "ollama_url", "http://gpu:11434"),
 ])
 def test_surcharge_par_variable(variable, brut, champ, attendu):
@@ -104,3 +102,17 @@ def test_options_de_generation():
     assert r.options() == {"temperature": 0.0, "num_ctx": 8192,
                            "num_predict": config.VERIFY_MAX_TOKENS}
     assert r.options(num_predict=1000)["num_predict"] == 1000
+
+
+def test_plus_de_variable_pour_le_modele_d_embeddings():
+    # Une seule source de vérité : config.MODELE_EMBEDDING (estampillé).
+    assert "SF_EMBED_MODEL" not in llm.VARIABLES_ENV.values()
+
+
+@pytest.mark.parametrize("valeur, attendu", [
+    ("ollama:bge-m3", "bge-m3"),
+    ("paraphrase-multilingual-MiniLM-L12-v2", None),
+])
+def test_modele_embedding_ollama(monkeypatch, valeur, attendu):
+    monkeypatch.setattr(config, "MODELE_EMBEDDING", valeur)
+    assert llm.modele_embedding_ollama() == attendu

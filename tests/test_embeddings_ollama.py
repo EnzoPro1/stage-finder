@@ -33,7 +33,21 @@ def faux_embed(monkeypatch):
 
 
 @pytest.fixture
-def cache(tmp_path, monkeypatch):
+def digests(monkeypatch):
+    """Faux /api/tags : ``modele -> digest`` modifiable, lectures comptées."""
+    etat = {"bge-m3": "poids-v1", "autre": "poids-a", "lectures": 0}
+
+    def digest_modele(nom, reglages=None):
+        etat["lectures"] += 1
+        return etat[nom]
+    monkeypatch.setattr(cache_embeddings.llm, "digest_modele", digest_modele)
+    cache_embeddings.oublier_digests()
+    yield etat
+    cache_embeddings.oublier_digests()
+
+
+@pytest.fixture
+def cache(tmp_path, monkeypatch, digests):
     chemin = tmp_path / "emb.db"
     monkeypatch.setattr(config, "CHEMIN_CACHE_EMBEDDINGS", chemin)
     return chemin
@@ -74,6 +88,31 @@ def test_le_cache_survit_au_processus(faux_embed, cache):
     faux_embed.clear()
     cache_embeddings.encoder(["a"], "bge-m3")
     assert faux_embed == []
+
+
+def test_nouveaux_poids_invalident_le_cache(faux_embed, cache, digests):
+    cache_embeddings.encoder(["a"], "bge-m3")
+    digests["bge-m3"] = "poids-v2"          # `ollama pull` a changé les poids
+    cache_embeddings.oublier_digests()      # run suivant
+    cache_embeddings.encoder(["a"], "bge-m3")
+    assert len(faux_embed) == 2
+
+
+def test_digest_lu_une_fois_par_run(faux_embed, cache, digests):
+    cache_embeddings.encoder(["a"], "bge-m3")
+    cache_embeddings.encoder(["b"], "bge-m3")
+    assert digests["lectures"] == 1
+    cache_embeddings.oublier_digests()
+    cache_embeddings.encoder(["a"], "bge-m3")
+    assert digests["lectures"] == 2
+
+
+def test_un_run_reouvre_la_lecture_des_digests(monkeypatch, digests):
+    cache_embeddings.cle_modele("bge-m3")
+    monkeypatch.setattr(main, "collecter", lambda utiliser_jobspy: [])
+    main.collecter_et_classer(utiliser_jobspy=False)
+    cache_embeddings.cle_modele("bge-m3")
+    assert digests["lectures"] == 2
 
 
 def test_liste_vide(faux_embed, cache):

@@ -134,7 +134,6 @@ class ConfigModel(BaseModel):
     LLM_NUM_CTX: int = Field(ge=512, le=131072)
     LLM_KEEP_ALIVE: str | int
     LLM_NOUVELLES_TENTATIVES: int = Field(ge=0, le=5)
-    LLM_MODELE_EMBEDDING: str = Field(min_length=1)
 
     # --- Persistance / réseau ---
     CHEMIN_BASE: str = Field(min_length=1)

@@ -211,7 +211,8 @@ def test_reponse_http_non_json(ollama, reglages):
 # ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------
-def test_embed_par_lots_dans_l_ordre(ollama, reglages):
+def test_embed_par_lots_dans_l_ordre(ollama, reglages, monkeypatch):
+    monkeypatch.setattr(llm.config, "MODELE_EMBEDDING", "ollama:bge-m3")
     faux = ollama(_Reponse({"embeddings": [[1.0], [2.0]]}),
                   _Reponse({"embeddings": [[3.0]]}))
     vecteurs = llm.embed(["a", "b", "c"], reglages=reglages, taille_lot=2)
@@ -224,6 +225,20 @@ def test_embed_par_lots_dans_l_ordre(ollama, reglages):
     assert faux.jeton_tenu == [True, True]
 
 
+def test_embed_sans_modele_ollama_configure(ollama, reglages):
+    faux = ollama()
+    # Défaut du projet : MiniLM, servi par sentence-transformers, pas Ollama.
+    with pytest.raises(llm.ErreurLLM, match="ollama:bge-m3"):
+        llm.embed(["a"], reglages=reglages)
+    assert faux.appels == []
+
+
+def test_embed_modele_explicite(ollama, reglages):
+    faux = ollama(_Reponse({"embeddings": [[1.0]]}))
+    llm.embed(["a"], reglages=reglages, modele="nomic-embed-text")
+    assert faux.appels[0][1]["model"] == "nomic-embed-text"
+
+
 def test_embed_vide_sans_appel(ollama, reglages):
     faux = ollama()
     assert llm.embed([], reglages=reglages) == []
@@ -233,17 +248,19 @@ def test_embed_vide_sans_appel(ollama, reglages):
 def test_embed_nombre_de_vecteurs_incoherent(ollama, reglages):
     ollama(_Reponse({"embeddings": [[1.0]]}))
     with pytest.raises(llm.OllamaIndisponible, match="2 texte"):
-        llm.embed(["a", "b"], reglages=reglages)
+        llm.embed(["a", "b"], reglages=reglages, modele="bge-m3")
 
 
 # ---------------------------------------------------------------------------
 # Présence des modèles
 # ---------------------------------------------------------------------------
-def _tags(monkeypatch, noms=None, exc=None):
+def _tags(monkeypatch, noms=None, exc=None, digests=None):
     def faux_get(url, timeout=None):
         if exc is not None:
             raise exc
-        return _Reponse({"models": [{"name": n} for n in noms]})
+        digests_ = digests or {}
+        return _Reponse({"models": [{"name": n, "digest": digests_.get(n, "d-" + n)}
+                                    for n in noms]})
     monkeypatch.setattr(llm.requests, "get", faux_get)
 
 
@@ -268,3 +285,14 @@ def test_serveur_injoignable_n_est_pas_un_modele_absent(monkeypatch, reglages):
     _tags(monkeypatch, exc=requests.exceptions.ConnectionError("refusé"))
     with pytest.raises(llm.OllamaIndisponible):
         llm.modeles_manquants(reglages=reglages)
+
+
+def test_digest_d_un_modele(monkeypatch, reglages):
+    _tags(monkeypatch, ["bge-m3:latest"], digests={"bge-m3:latest": "7907646426"})
+    assert llm.digest_modele("bge-m3", reglages) == "7907646426"
+
+
+def test_digest_d_un_modele_absent(monkeypatch, reglages):
+    _tags(monkeypatch, ["qwen3:4b"])
+    with pytest.raises(llm.ModeleAbsent, match="ollama pull bge-m3"):
+        llm.digest_modele("bge-m3", reglages)

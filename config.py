@@ -736,11 +736,6 @@ LLM_NUM_CTX = 8192
 LLM_KEEP_ALIVE = "10m"
 LLM_NOUVELLES_TENTATIVES = 2
 
-# Modèle d'embeddings servi par Ollama, pour le pré-filtrage (voir llm.embed).
-# Pas encore branché sur le classement : MiniLM (MODELE_EMBEDDING) reste le
-# défaut tant que bge-m3 n'a pas été mesuré au moins aussi bon sur l'instantané.
-LLM_MODELE_EMBEDDING = "bge-m3"
-
 # ---------------------------------------------------------------------------
 # 10) Divers
 # ---------------------------------------------------------------------------

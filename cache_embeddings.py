@@ -7,16 +7,19 @@ une fois par (modèle, texte), puis relu d'un run à l'autre.
 
 ## Clé
 
-``(modele, sha256(texte))``. Le texte ENTIER est haché, préfixes compris :
-changer ``PREFIXE_DOCUMENT`` ou la composition titre + description change la
-clé, donc provoque un recalcul — jamais un vecteur périmé relu en silence.
+``(modele@digest, sha256(texte))``.
 
-## Ce que la clé ne couvre PAS
+- Le texte ENTIER est haché, préfixes compris : changer ``PREFIXE_DOCUMENT``
+  ou la composition titre + description change la clé, donc provoque un
+  recalcul — jamais un vecteur périmé relu en silence.
+- Le DIGEST du modèle (``/api/tags``) identifie ses poids : un ``ollama pull``
+  qui les remplace sous le même tag change la clé, et le cache se recalcule
+  tout seul. Les anciennes lignes restent en base, orphelines et inoffensives ;
+  supprimer le fichier les efface.
 
-Les poids du modèle : seul son NOM est dans la clé. Un ``ollama pull bge-m3``
-qui ramènerait d'autres poids sous le même tag serait invisible ici — même
-risque, accepté pour la même raison, que pour l'estampille de ``reference.py``.
-Supprimer le fichier suffit à tout recalculer.
+Le digest est lu UNE fois par run (``oublier_digests`` ouvre un run) : un
+appel à ``/api/tags`` par encodage serait du bruit, et les poids ne changent
+pas au milieu d'un classement.
 
 ## Fichier séparé
 
@@ -38,6 +41,25 @@ import config
 import llm
 
 logger = logging.getLogger(__name__)
+
+# modèle -> digest, pour le run en cours.
+_digests: dict[str, str] = {}
+
+
+def oublier_digests() -> None:
+    """Ouvre un nouveau run : les digests seront relus au prochain encodage.
+
+    Nécessaire pour l'app web, dont le processus dure : sans cela, un
+    ``ollama pull`` fait pendant qu'elle tourne ne serait vu qu'au redémarrage.
+    """
+    _digests.clear()
+
+
+def cle_modele(modele: str, reglages: llm.Reglages | None = None) -> str:
+    """``modele@digest`` : la colonne ``modele`` du cache."""
+    if modele not in _digests:
+        _digests[modele] = llm.digest_modele(modele, reglages)
+    return f"{modele}@{_digests[modele]}"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS embeddings (
@@ -95,9 +117,11 @@ def encoder(
     chemin = chemin or config.CHEMIN_CACHE_EMBEDDINGS
     cles = [empreinte(t) for t in textes]
 
+    cle_mod = cle_modele(modele, reglages)
+
     conn = _ouvrir(chemin)
     try:
-        connus = _lire(conn, modele, sorted(set(cles)))
+        connus = _lire(conn, cle_mod, sorted(set(cles)))
         manquants: dict[str, str] = {}
         for cle, texte in zip(cles, textes):
             if cle not in connus:
@@ -112,7 +136,7 @@ def encoder(
                 conn.executemany(
                     "INSERT OR REPLACE INTO embeddings (modele, empreinte, dim, vecteur) "
                     "VALUES (?, ?, ?, ?)",
-                    [(modele, cle, int(v.shape[0]), v.tobytes()) for cle, v in nouveaux.items()],
+                    [(cle_mod, cle, int(v.shape[0]), v.tobytes()) for cle, v in nouveaux.items()],
                 )
             connus.update(nouveaux)
 

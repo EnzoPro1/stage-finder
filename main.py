@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import console  # noqa: F401 - force UTF-8 sur la console Windows (badge ★, emoji)
+import cache_embeddings
 import config
 from config_schema import valider_config
 import recherche
@@ -249,6 +250,9 @@ def collecter_et_classer(utiliser_jobspy: bool) -> list[tuple[Offre, float]]:
     Extrait de ``executer`` pour être réutilisé tel quel par l'app web (app.py),
     qui affiche ce classement immédiatement, avant toute vérification IA.
     """
+    # Nouveau run : le digest des modèles d'embeddings Ollama sera relu (un
+    # `ollama pull` fait depuis le run précédent invalide leur cache).
+    cache_embeddings.oublier_digests()
     offres = collecter(utiliser_jobspy=utiliser_jobspy)
     if not offres:
         logger.warning("Aucune offre collectée. Vérifie tes clés API dans le .env.")

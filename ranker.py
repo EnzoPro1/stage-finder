@@ -27,6 +27,7 @@ import numpy as np
 import config
 import embeddings_env
 import extract
+import llm
 from normalize import Offre
 
 # Le magasin de certificats de l'OS, pour le cas où le modèle doit encore
@@ -46,7 +47,7 @@ _modele = None
 _nom_modele: str | None = None
 
 # Préfixe d'un modèle servi par Ollama plutôt que par sentence-transformers.
-PREFIXE_OLLAMA = "ollama:"
+PREFIXE_OLLAMA = llm.PREFIXE_OLLAMA
 
 
 def est_ollama(nom: str) -> bool:

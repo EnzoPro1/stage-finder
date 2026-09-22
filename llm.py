@@ -73,8 +73,13 @@ VARIABLES_ENV: dict[str, str] = {
     "timeout_s": "SF_LLM_TIMEOUT_S",
     "num_predict": "SF_LLM_NUM_PREDICT",
     "nouvelles_tentatives": "SF_LLM_NOUVELLES_TENTATIVES",
-    "modele_embedding": "SF_EMBED_MODEL",
 }
+
+# Préfixe de `config.MODELE_EMBEDDING` désignant un modèle servi par Ollama
+# (« ollama:bge-m3 ») plutôt que par sentence-transformers. Une seule source de
+# vérité pour le modèle d'embeddings : cette constante-là, estampillée par
+# reference.py — pas de variable SF_ qui la doublerait.
+PREFIXE_OLLAMA = "ollama:"
 
 # Syntaxe de durée acceptée par Ollama pour `keep_alive` ("10m", "1h30m", "-1").
 _MOTIF_DUREE = re.compile(r"^-?(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$")
@@ -151,7 +156,6 @@ class Reglages(BaseModel):
     timeout_s: int = Field(gt=0, le=600)
     num_predict: int = Field(ge=120, le=4096)
     nouvelles_tentatives: int = Field(ge=0, le=5)
-    modele_embedding: str = Field(min_length=1)
 
     @field_validator("ollama_url")
     @classmethod
@@ -219,7 +223,6 @@ def reglages_par_defaut() -> dict:
         "timeout_s": config.VERIFY_TIMEOUT_S,
         "num_predict": config.VERIFY_MAX_TOKENS,
         "nouvelles_tentatives": config.LLM_NOUVELLES_TENTATIVES,
-        "modele_embedding": config.LLM_MODELE_EMBEDDING,
     }
 
 
@@ -351,6 +354,15 @@ def generer_structure(
 # ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------
+def modele_embedding_ollama(nom: str | None = None) -> str | None:
+    """Nom Ollama du modèle d'embeddings (``config.MODELE_EMBEDDING`` par défaut).
+
+    « ollama:bge-m3 » -> « bge-m3 » ; un modèle sentence-transformers -> None.
+    """
+    nom = nom if nom is not None else config.MODELE_EMBEDDING
+    return nom[len(PREFIXE_OLLAMA):] if nom.startswith(PREFIXE_OLLAMA) else None
+
+
 def embed(
     textes: list[str],
     *,
@@ -366,7 +378,13 @@ def embed(
     if not textes:
         return []
     r = reglages or charger_reglages()
-    nom = modele or r.modele_embedding
+    nom = modele or modele_embedding_ollama()
+    if nom is None:
+        raise ErreurLLM(
+            f"Aucun modèle d'embeddings Ollama : config.MODELE_EMBEDDING vaut "
+            f"« {config.MODELE_EMBEDDING} ». Passe `modele=` ou préfixe-le par "
+            f"« {PREFIXE_OLLAMA} » (ex. « {PREFIXE_OLLAMA}bge-m3 »)."
+        )
     vecteurs: list[list[float]] = []
     for debut in range(0, len(textes), taille_lot):
         lot = textes[debut : debut + taille_lot]
@@ -400,8 +418,11 @@ def message_modeles_manquants(modeles: list[str]) -> str:
     return f"Modèle(s) Ollama absent(s) : {', '.join(modeles)}. Lance : {commandes}"
 
 
-def modeles_installes(reglages: Reglages | None = None) -> set[str]:
-    """Noms complets des modèles installés. Lève ``OllamaIndisponible``."""
+def digests_installes(reglages: Reglages | None = None) -> dict[str, str]:
+    """``nom complet -> digest`` des modèles installés. Lève ``OllamaIndisponible``.
+
+    Le digest identifie les POIDS : un ``ollama pull`` qui les change le change.
+    """
     r = reglages or charger_reglages()
     try:
         reponse = requests.get(f"{r.ollama_url}/api/tags", timeout=5)
@@ -410,7 +431,21 @@ def modeles_installes(reglages: Reglages | None = None) -> set[str]:
             f"Ollama injoignable sur {r.ollama_url} ({err}). Lance « ollama serve »."
         ) from err
     donnees = _lire_reponse(reponse, "/api/tags")
-    return {_nom_complet(m.get("name", "")) for m in donnees.get("models", [])}
+    return {_nom_complet(m.get("name", "")): str(m.get("digest", ""))
+            for m in donnees.get("models", [])}
+
+
+def modeles_installes(reglages: Reglages | None = None) -> set[str]:
+    """Noms complets des modèles installés. Lève ``OllamaIndisponible``."""
+    return set(digests_installes(reglages))
+
+
+def digest_modele(nom: str, reglages: Reglages | None = None) -> str:
+    """Digest des poids de ``nom``. Lève ``ModeleAbsent`` s'il n'est pas installé."""
+    digest = digests_installes(reglages).get(_nom_complet(nom))
+    if not digest:
+        raise ModeleAbsent([nom])
+    return digest
 
 
 def modeles_manquants(
@@ -454,7 +489,10 @@ if __name__ == "__main__":
     reglages = charger_reglages()
     print(json.dumps(reglages.model_dump(), ensure_ascii=False, indent=2))
     try:
-        manquants = modeles_manquants([reglages.modele, reglages.modele_embedding], reglages)
+        requis = [reglages.modele]
+        if modele_embedding_ollama():
+            requis.append(modele_embedding_ollama())
+        manquants = modeles_manquants(requis, reglages)
     except OllamaIndisponible as err:
         print(f"⚠️  {err}")
         raise SystemExit(1)
