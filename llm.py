@@ -476,11 +476,16 @@ def diagnostic_demarrage(
     try:
         manquants = modeles_manquants(modeles, r)
     except OllamaIndisponible as err:
-        return f"{err} La vérification LLM sera ignorée (classement cosinus seul)."
+        return f"{err} {_CONSEQUENCES}"
     if manquants:
-        return (f"{message_modeles_manquants(manquants)} — sans cela, la vérification "
-                f"LLM sera ignorée (classement cosinus seul).")
+        return f"{message_modeles_manquants(manquants)} — sans cela : {_CONSEQUENCES}"
     return None
+
+
+# Ce qu'un Ollama absent coûte au run : les deux chemins se dégradent, aucun ne
+# l'arrête. Dit au démarrage pour qu'on ne le découvre pas à la lecture des scores.
+_CONSEQUENCES = ("vérification LLM ignorée (classement cosinus seul), et embeddings "
+                 "Ollama remplacés par le modèle de repli (config.MODELE_EMBEDDING_REPLI).")
 
 
 if __name__ == "__main__":

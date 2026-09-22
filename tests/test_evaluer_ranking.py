@@ -51,10 +51,10 @@ def sims_figees(monkeypatch):
     """
     etat = {"sims": None}
 
-    def _encoder(offres):
+    def _encoder(offres, modele=None):
         return np.zeros((len(offres), 2))
 
-    def _similarites(emb):
+    def _similarites(emb, modele=None):
         return np.asarray(etat["sims"][: len(emb)], dtype=float)
 
     monkeypatch.setattr(ranker, "encoder_offres", _encoder)

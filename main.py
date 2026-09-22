@@ -273,19 +273,23 @@ def collecter_et_classer(utiliser_jobspy: bool) -> list[tuple[Offre, float]]:
         return []
 
     # La dédup floue a SON modèle (seuil calibré sur MiniLM) ; le classement,
-    # le sien. Même modèle : vecteurs calculés UNE fois et partagés.
-    embeddings = None
+    # le sien. Même modèle — celui voulu ou celui de repli : vecteurs calculés
+    # UNE fois et partagés.
+    connus = {}
     if config.DEDUP_FLOUE_ACTIVE:
         embeddings = ranker.encoder_offres(offres, modele=config.MODELE_EMBEDDING_DEDUP)
         offres, embeddings = dedup.dedupliquer_flou(offres, embeddings)
-    if config.MODELE_EMBEDDING != config.MODELE_EMBEDDING_DEDUP:
-        embeddings = None
+        connus[config.MODELE_EMBEDDING_DEDUP] = embeddings
 
-    classees = ranker.classer(offres, embeddings=embeddings)
+    resultat = ranker.classer_avec_repli(offres, connus)
+    # Le modèle qui a RÉELLEMENT servi part avec le bilan du run (table `runs`).
+    releve = observabilite.actif()
+    if releve is not None:
+        releve.noter_classement(resultat.modele, resultat.repli)
     # Enchaînement VRAM : le modèle d'embeddings (s'il est servi par Ollama)
     # quitte le GPU AVANT que la vérification n'y charge le LLM.
-    ranker.liberer_modele()
-    return classees
+    ranker.liberer_modele(resultat.modele)
+    return resultat.classees
 
 
 def verifier_shortlist(

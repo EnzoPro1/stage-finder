@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS runs (
     horodatage  TEXT,
     nb_offres   INTEGER,
     nb_nouvelles INTEGER,
-    bilan       TEXT     -- JSON de observabilite.Releve.resume() : en-tête du rapport
+    bilan       TEXT,    -- JSON de observabilite.Releve.resume() : en-tête du rapport
+    modele_embedding TEXT -- modèle qui a RÉELLEMENT classé ce run (repli compris)
 );
 
 -- Cache des verdicts de vérification LLM. Un verdict est calculé UNE seule fois
@@ -205,7 +206,7 @@ _COLONNES_AJOUTEES = {
     "offres": (("familles", "TEXT"), ("familles_titre", "TEXT"), ("drapeaux", "TEXT"),
                ("commune_trajet", "TEXT"), ("trajets", "TEXT"),
                ("premier_run", "INTEGER"), ("dernier_run", "INTEGER")),
-    "runs": (("bilan", "TEXT"),),
+    "runs": (("bilan", "TEXT"), ("modele_embedding", "TEXT")),
 }
 
 
@@ -284,10 +285,14 @@ def enregistrer_run(
     aujourd_hui = date.today().isoformat()
     # Le run est posé EN PREMIER : son id est écrit sur chaque ligne. Ses
     # compteurs sont complétés à la fin.
+    # Le modèle qui a RÉELLEMENT classé ce run (repli compris) a sa colonne :
+    # c'est lui qui dit si deux `dernier_score` se comparent.
+    modele = ((bilan or {}).get("classement") or {}).get("modele_embedding")
     run_id = conn.execute(
-        "INSERT INTO runs (horodatage, nb_offres, nb_nouvelles, bilan) VALUES (?,?,?,?)",
+        "INSERT INTO runs (horodatage, nb_offres, nb_nouvelles, bilan, modele_embedding) "
+        "VALUES (?,?,?,?,?)",
         (datetime.now().isoformat(timespec="seconds"), 0, 0,
-         json.dumps(bilan, ensure_ascii=False) if bilan is not None else None),
+         json.dumps(bilan, ensure_ascii=False) if bilan is not None else None, modele),
     ).lastrowid
     nouvelles: set[str] = set()
     # Les textes sont accumulés puis écrits APRÈS le commit des offres.
@@ -398,7 +403,8 @@ def enregistrer_run(
 def dernier_run(conn: sqlite3.Connection) -> dict | None:
     """Le run le plus récent — id, horodatage, compteurs, bilan désérialisé — ou None."""
     ligne = conn.execute(
-        "SELECT id, horodatage, nb_offres, nb_nouvelles, bilan FROM runs ORDER BY id DESC LIMIT 1"
+        "SELECT id, horodatage, nb_offres, nb_nouvelles, bilan, modele_embedding "
+        "FROM runs ORDER BY id DESC LIMIT 1"
     ).fetchone()
     if ligne is None:
         return None

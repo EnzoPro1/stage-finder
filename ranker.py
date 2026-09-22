@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -130,6 +131,63 @@ def _charger_modele(nom: str | None = None):
             _modele.max_seq_length = config.MAX_SEQ_LENGTH
         logger.info("Modèle chargé (max_seq_length = %s).", _modele.max_seq_length)
     return _modele
+
+
+@dataclass
+class Classement:
+    """Résultat de ``classer_avec_repli`` : le classement ET le modèle qui l'a produit."""
+
+    classees: list[tuple[Offre, float]]
+    modele: str
+    repli: str | None = None   # raison du repli, None si le modèle voulu a servi
+
+
+def resoudre_modele(nom: str | None = None) -> tuple[str, str | None]:
+    """Modèle qui servira vraiment, et la raison d'un repli éventuel.
+
+    Un modèle sentence-transformers est toujours disponible (CPU, cache HF).
+    Un modèle Ollama l'est si le serveur répond ET que le modèle est installé ;
+    sinon, ``config.MODELE_EMBEDDING_REPLI``.
+    """
+    nom = nom or config.MODELE_EMBEDDING
+    if not est_ollama(nom):
+        return nom, None
+    try:
+        manquants = llm.modeles_manquants([EncodeurOllama(nom).nom])
+    except llm.OllamaIndisponible as err:
+        return config.MODELE_EMBEDDING_REPLI, str(err)
+    if manquants:
+        return config.MODELE_EMBEDDING_REPLI, llm.message_modeles_manquants(manquants)
+    return nom, None
+
+
+def classer_avec_repli(
+    offres: list[Offre], vecteurs_connus: dict[str, np.ndarray] | None = None
+) -> Classement:
+    """``classer`` sur ``config.MODELE_EMBEDDING``, ou sur le repli s'il le faut.
+
+    Deux moments où Ollama peut manquer : AVANT (serveur arrêté, modèle absent
+    — ``resoudre_modele``) et PENDANT (serveur tombé au milieu de l'encodage).
+    Dans les deux cas, TOUT le classement repasse sur le modèle de repli :
+    mélanger des vecteurs de deux modèles donnerait des cosinus sans aucun sens.
+
+    ``vecteurs_connus`` : ``modele -> embeddings`` déjà calculés (ceux de la
+    dédup), réutilisés si le modèle qui sert est le même.
+    """
+    vecteurs_connus = vecteurs_connus or {}
+    voulu = config.MODELE_EMBEDDING
+    modele, raison = resoudre_modele(voulu)
+    if raison is None:
+        try:
+            return Classement(classer(offres, vecteurs_connus.get(modele), modele), modele)
+        except llm.ErreurLLM as err:
+            modele, raison = config.MODELE_EMBEDDING_REPLI, f"échec pendant l'encodage ({err})"
+    logger.warning(
+        "Embeddings : %s — classement sur « %s » au lieu de « %s » (REPLI). Les scores "
+        "de ce run ne sont pas comparables à ceux d'un run classé par « %s ».",
+        raison, modele, voulu, voulu,
+    )
+    return Classement(classer(offres, vecteurs_connus.get(modele), modele), modele, raison)
 
 
 def modeles_ollama_requis() -> list[str]:
@@ -268,14 +326,17 @@ def encoder_offres(offres: list[Offre], modele: str | None = None) -> np.ndarray
     )
 
 
-def similarites_reference(emb_offres: np.ndarray) -> np.ndarray:
+def similarites_reference(emb_offres: np.ndarray, modele: str | None = None) -> np.ndarray:
     """Similarité de chaque offre aux profils de référence, agrégée.
 
     - "max"     : la meilleure ancre décide (une offre « IA pure » n'est pas
                   pénalisée de ne pas ressembler au profil cyber).
     - "moyenne" : moyenne pondérée par les poids des profils.
+
+    ``modele`` : celui qui a encodé ``emb_offres`` — les profils DOIVENT
+    passer par le même, sinon le cosinus compare deux espaces différents.
     """
-    modele = _charger_modele()
+    modele = _charger_modele(modele)
     profils = _profils_reference()
     textes = [f"{config.PREFIXE_REQUETE}{p['texte']}" for p in profils]
     poids = np.array([float(p["poids"]) for p in profils])
@@ -353,7 +414,7 @@ def composer(
 
 
 def classer(
-    offres: list[Offre], embeddings: np.ndarray | None = None
+    offres: list[Offre], embeddings: np.ndarray | None = None, modele: str | None = None
 ) -> list[tuple[Offre, float]]:
     """
     Classe les offres par pertinence décroissante.
@@ -366,8 +427,9 @@ def classer(
     if not offres:
         return []
 
-    emb_offres = encoder_offres(offres) if embeddings is None else np.asarray(embeddings)
-    sims = similarites_reference(emb_offres)
+    emb_offres = (encoder_offres(offres, modele) if embeddings is None
+                  else np.asarray(embeddings))
+    sims = similarites_reference(emb_offres, modele)
 
     # Boost mots-clés + signaux souples (durée / date de début).
     boosts_mc, boosts_soft, tags_par_offre = [], [], []

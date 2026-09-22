@@ -79,6 +79,7 @@ class ConfigModel(BaseModel):
     # --- Modèle / embeddings ---
     MODELE_EMBEDDING: str = Field(min_length=1)
     MODELE_EMBEDDING_DEDUP: str = Field(min_length=1)
+    MODELE_EMBEDDING_REPLI: str = Field(min_length=1)
     MAX_SEQ_LENGTH: int | None = Field(default=None)
     PREFIXE_REQUETE: str = ""
     PREFIXE_DOCUMENT: str = ""

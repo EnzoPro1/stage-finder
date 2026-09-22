@@ -58,3 +58,10 @@ def _environnement_neutre(request, monkeypatch):
     monkeypatch.setattr(reglages_env, "_lire_dotenv", lambda: None)
     for nom in [n for n in os.environ if n.startswith("SF_")]:
         monkeypatch.delenv(nom)
+
+    # Aucun test ne dépend d'un Ollama lancé : le classement par défaut
+    # tourne donc sur le modèle CPU de repli. Les tests du chemin Ollama
+    # posent « ollama:… » eux-mêmes, avec Ollama mocké.
+    import config
+
+    monkeypatch.setattr(config, "MODELE_EMBEDDING", config.MODELE_EMBEDDING_REPLI)

@@ -191,7 +191,12 @@ def test_liberer_ne_decharge_qu_un_modele_ollama(monkeypatch):
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def pipeline(monkeypatch):
-    """Neutralise tout ce qui précède la dédup floue ; trace les encodages."""
+    """Neutralise tout ce qui précède la dédup floue ; trace encodages et classements.
+
+    Ollama est présent par défaut ; ``trace["ollama"]`` règle son état :
+    "ok", "injoignable", "sans_modele", ou "panne_en_cours" (tombe pendant
+    l'encodage).
+    """
     offres = [_offre("A"), _offre("B")]
     monkeypatch.setattr(main, "collecter", lambda utiliser_jobspy: list(offres))
     monkeypatch.setattr(main, "filtrer", lambda o: o)
@@ -199,45 +204,118 @@ def pipeline(monkeypatch):
     monkeypatch.setattr(main.extract, "annoter_toutes", lambda o: None)
     monkeypatch.setattr(main.dedup, "dedupliquer", lambda o: o)
     monkeypatch.setattr(main.dedup, "dedupliquer_flou", lambda o, e: (o, e))
-    trace = {"encodages": [], "classer": None, "liberes": 0}
+    trace = {"encodages": [], "classements": [], "liberes": [], "ollama": "ok"}
+
+    def modeles_manquants(modeles, reglages=None):
+        if trace["ollama"] == "injoignable":
+            raise ranker.llm.OllamaIndisponible("Ollama injoignable sur http://localhost:11434")
+        return list(modeles) if trace["ollama"] == "sans_modele" else []
 
     def encoder(o, modele=None):
         trace["encodages"].append(modele)
         return np.eye(len(o))
 
-    def classer(o, embeddings=None):
-        trace["classer"] = embeddings
+    def classer(o, embeddings=None, modele=None):
+        trace["classements"].append((modele, embeddings is not None))
+        if trace["ollama"] == "panne_en_cours" and ranker.est_ollama(modele):
+            raise ranker.llm.OllamaIndisponible("connexion perdue")
         return [(x, 0.5) for x in o]
 
+    monkeypatch.setattr(ranker.llm, "modeles_manquants", modeles_manquants)
     monkeypatch.setattr(main.ranker, "encoder_offres", encoder)
     monkeypatch.setattr(main.ranker, "classer", classer)
     monkeypatch.setattr(main.ranker, "liberer_modele",
-                        lambda nom=None: trace.__setitem__("liberes", trace["liberes"] + 1))
+                        lambda nom=None: trace["liberes"].append(nom))
     return trace
+
+
+MINILM = "paraphrase-multilingual-MiniLM-L12-v2"
 
 
 def test_meme_modele_vecteurs_partages(pipeline, monkeypatch):
     monkeypatch.setattr(config, "DEDUP_FLOUE_ACTIVE", True)
+    monkeypatch.setattr(config, "MODELE_EMBEDDING", MINILM)
     main.collecter_et_classer(utiliser_jobspy=False)
-    assert pipeline["encodages"] == [config.MODELE_EMBEDDING_DEDUP]
-    assert pipeline["classer"] is not None  # réutilisés, pas ré-encodés
-    assert pipeline["liberes"] == 1
+    assert pipeline["encodages"] == [MINILM]
+    assert pipeline["classements"] == [(MINILM, True)]  # réutilisés, pas ré-encodés
+    assert pipeline["liberes"] == [MINILM]
 
 
 def test_modeles_differents_la_dedup_garde_minilm(pipeline, monkeypatch):
     monkeypatch.setattr(config, "DEDUP_FLOUE_ACTIVE", True)
     monkeypatch.setattr(config, "MODELE_EMBEDDING", "ollama:bge-m3")
     main.collecter_et_classer(utiliser_jobspy=False)
-    assert pipeline["encodages"] == ["paraphrase-multilingual-MiniLM-L12-v2"]
-    assert pipeline["classer"] is None  # le classement encode avec SON modèle
-    assert pipeline["liberes"] == 1
+    assert pipeline["encodages"] == [MINILM]
+    assert pipeline["classements"] == [("ollama:bge-m3", False)]  # encode avec SON modèle
+    assert pipeline["liberes"] == ["ollama:bge-m3"]
 
 
 def test_sans_dedup_floue_pas_d_encodage_pour_rien(pipeline, monkeypatch):
     monkeypatch.setattr(config, "DEDUP_FLOUE_ACTIVE", False)
     main.collecter_et_classer(utiliser_jobspy=False)
     assert pipeline["encodages"] == []
-    assert pipeline["classer"] is None
+    assert pipeline["classements"][0][1] is False
+
+
+# ---------------------------------------------------------------------------
+# Repli sur MiniLM quand Ollama manque
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def releve():
+    r = main.observabilite.demarrer(sources=[])
+    yield r
+    main.observabilite.arreter()
+
+
+@pytest.mark.parametrize("etat, fragment", [
+    ("injoignable", "injoignable"),
+    ("sans_modele", "ollama pull bge-m3"),
+    ("panne_en_cours", "pendant l'encodage"),
+])
+def test_repli_sur_minilm(pipeline, monkeypatch, caplog, releve, etat, fragment):
+    monkeypatch.setattr(config, "DEDUP_FLOUE_ACTIVE", True)
+    monkeypatch.setattr(config, "MODELE_EMBEDDING", "ollama:bge-m3")
+    pipeline["ollama"] = etat
+    with caplog.at_level("WARNING"):
+        classees = main.collecter_et_classer(utiliser_jobspy=False)
+    assert len(classees) == 2  # le run se classe quand même
+    # Le DERNIER classement, celui qui compte, est entièrement sur le repli,
+    # et réutilise les vecteurs de la dédup (même modèle).
+    assert pipeline["classements"][-1] == (MINILM, True)
+    assert "REPLI" in caplog.text and fragment in caplog.text
+    assert "pas comparables" in caplog.text
+    assert releve.modele_embedding == MINILM and fragment in releve.repli_embedding
+
+
+def test_sans_repli_le_releve_porte_le_modele_voulu(pipeline, monkeypatch, releve):
+    monkeypatch.setattr(config, "MODELE_EMBEDDING", "ollama:bge-m3")
+    main.collecter_et_classer(utiliser_jobspy=False)
+    assert releve.modele_embedding == "ollama:bge-m3"
+    assert releve.repli_embedding is None
+    assert releve.resume()["classement"] == {"modele_embedding": "ollama:bge-m3",
+                                             "repli": None}
+
+
+def test_modele_sentence_transformers_ne_consulte_pas_ollama(monkeypatch):
+    def interdit(*a, **k):
+        raise AssertionError("Ollama consulté pour un modèle CPU")
+    monkeypatch.setattr(ranker.llm, "modeles_manquants", interdit)
+    assert ranker.resoudre_modele(MINILM) == (MINILM, None)
+
+
+def test_le_run_enregistre_le_modele_qui_a_servi():
+    conn = storage.ouvrir(":memory:")
+    bilan = {"classement": {"modele_embedding": MINILM, "repli": "Ollama injoignable"}}
+    storage.enregistrer_run(conn, [(_offre("A"), 0.5)], bilan=bilan)
+    run = storage.dernier_run(conn)
+    assert run["modele_embedding"] == MINILM
+    assert run["bilan"]["classement"]["repli"] == "Ollama injoignable"
+
+
+def test_run_sans_bilan_reste_enregistrable():
+    conn = storage.ouvrir(":memory:")
+    storage.enregistrer_run(conn, [(_offre("A"), 0.5)])
+    assert storage.dernier_run(conn)["modele_embedding"] is None
 
 
 # ---------------------------------------------------------------------------

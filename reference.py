@@ -85,6 +85,7 @@ PREFIXE_INSTANTANE = "stages.reference-"
 CONSTANTES_RANKING = (
     "config.MODELE_EMBEDDING",
     "config.MODELE_EMBEDDING_DEDUP",
+    "config.MODELE_EMBEDDING_REPLI",
     "config.MAX_SEQ_LENGTH",
     "config.PREFIXE_REQUETE",
     "config.PREFIXE_DOCUMENT",

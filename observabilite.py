@@ -181,6 +181,10 @@ class Releve:
         # bloqué : abaisse le plafond »). Une par ligne au plus. Le relevé les
         # affiche en tête ; il ne décide rien, et rien ne s'ajuste tout seul.
         self.conseils: dict[str, str] = {}
+        # Modèle d'embeddings qui a RÉELLEMENT classé ce run, et la raison d'un
+        # repli éventuel. Posés par le classement, gardés avec le run.
+        self.modele_embedding: str | None = None
+        self.repli_embedding: str | None = None
         # Les sources attendues sont créées D'AVANCE : une source qui échoue à
         # l'import ne poserait jamais sa ligne, et disparaîtrait du tableau au
         # lieu d'y apparaître en panne — exactement le silence qu'on corrige.
@@ -313,10 +317,18 @@ class Releve:
         return [f"⊘ Source « {nom} » désactivée{pour} : {raison}"
                 for nom, raison in self.ecartees.items()]
 
+    def noter_classement(self, modele: str, repli: str | None = None) -> None:
+        """Consigne le modèle d'embeddings qui a classé ce run (et un repli)."""
+        with self._verrou:
+            self.modele_embedding = modele
+            self.repli_embedding = repli
+
     def resume(self) -> dict:
         """Vue sérialisable du relevé (pour un rapport JSON ou un test)."""
         return {
             "perimetre": self.perimetre,
+            "classement": {"modele_embedding": self.modele_embedding,
+                           "repli": self.repli_embedding},
             "ecartees": dict(self.ecartees),
             "conseils": dict(self.conseils),
             "sources": [

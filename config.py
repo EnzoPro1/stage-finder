@@ -457,9 +457,17 @@ MARQUEURS_ETRANGERS = [
 #
 # Préfixe « ollama: » = modèle servi par Ollama (GPU) au lieu de
 # sentence-transformers (CPU), avec cache disque des vecteurs
-# (cache_embeddings.py) : « ollama:bge-m3 ». À ne passer en défaut qu'après
-# mesure sur l'instantané (benchmark.py) : au moins aussi bon en P@10 ET nDCG@10.
+# (cache_embeddings.py) : « ollama:bge-m3 ».
+#
+# À ne passer en défaut qu'après mesure sur l'instantané (benchmark.py) : au
+# moins aussi bon en P@10 ET nDCG@10.
 MODELE_EMBEDDING = "paraphrase-multilingual-MiniLM-L12-v2"
+
+# Modèle de REPLI du classement quand MODELE_EMBEDDING est servi par Ollama et
+# qu'Ollama ne répond pas, ou que le modèle manque : le run se classe quand même,
+# sur CPU, et enregistre le modèle qui a réellement servi (table `runs`) — deux
+# runs classés par des modèles différents n'ont pas des scores comparables.
+MODELE_EMBEDDING_REPLI = "paraphrase-multilingual-MiniLM-L12-v2"
 
 # Modèle de la DÉDUPLICATION FLOUE, distinct de celui du classement. Le seuil
 # SEUIL_DEDUP_FLOU (0,90) a été calibré sur les cosinus de MiniLM : un autre
