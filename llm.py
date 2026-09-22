@@ -183,6 +183,29 @@ class Reglages(BaseModel):
         }
 
 
+# Réglages EFFECTIFS qui décident un score LLM, exposés en attributs du module
+# (``llm.EFFECTIF_MODELE``…) pour l'estampille de ``reference.py``, qui lit
+# chaque constante par ``getattr(module, nom)``. Sans eux, un
+# ``SF_LLM_MODEL=gemma3:4b`` posé dans le .env changerait les verdicts sans que
+# la référence le voie : elle n'estampille que les défauts de config.py.
+# Ni l'URL, ni keep_alive, ni le timeout : ils ne changent pas une réponse.
+ESTAMPILLES = {
+    "EFFECTIF_MODELE": "modele",
+    "EFFECTIF_THINK": "think",
+    "EFFECTIF_TEMPERATURE": "temperature",
+    "EFFECTIF_NUM_CTX": "num_ctx",
+    "EFFECTIF_NUM_PREDICT": "num_predict",
+    "EFFECTIF_NOUVELLES_TENTATIVES": "nouvelles_tentatives",
+    "EFFECTIF_TOP_N": "top_n",
+}
+
+
+def __getattr__(nom: str):
+    if nom in ESTAMPILLES:
+        return getattr(charger_reglages(), ESTAMPILLES[nom])
+    raise AttributeError(f"module 'llm' has no attribute {nom!r}")
+
+
 def reglages_par_defaut() -> dict:
     """Défauts lus dans config.py AU MOMENT de l'appel (monkeypatchables)."""
     return {
@@ -251,14 +274,16 @@ def _lire_reponse(reponse, modele: str) -> dict:
         donnees = reponse.json()
     except ValueError:
         donnees = None
-    if reponse.status_code >= 400:
+    try:
+        reponse.raise_for_status()
+    except requests.exceptions.HTTPError:
         message = donnees.get("error", "") if isinstance(donnees, dict) else ""
         if reponse.status_code == 404 and "not found" in message:
-            raise ModeleAbsent([modele])
+            raise ModeleAbsent([modele]) from None
         raise OllamaIndisponible(
             f"Ollama a répondu HTTP {reponse.status_code} pour « {modele} » : "
             f"{message or 'sans détail'}"
-        )
+        ) from None
     if not isinstance(donnees, dict):
         raise OllamaIndisponible(f"Réponse Ollama non-JSON pour « {modele} ».")
     return donnees
@@ -420,6 +445,26 @@ def modeles_manquants(
     requis = modeles if modeles is not None else [r.modele]
     installes = modeles_installes(r)
     return [m for m in requis if _nom_complet(m) not in installes]
+
+
+def diagnostic_demarrage(
+    modeles: list[str] | None = None, reglages: Reglages | None = None
+) -> str | None:
+    """Avertissement à afficher au démarrage, ou ``None`` si tout est prêt.
+
+    Ne lève jamais : un Ollama absent n'empêche pas de collecter et de classer
+    au cosinus. Le but est de le dire TOUT DE SUITE, avant des minutes de
+    collecte, et avec la commande qui répare.
+    """
+    r = reglages or charger_reglages()
+    try:
+        manquants = modeles_manquants(modeles, r)
+    except OllamaIndisponible as err:
+        return f"{err} La vérification LLM sera ignorée (classement cosinus seul)."
+    if manquants:
+        return (f"{message_modeles_manquants(manquants)} — sans cela, la vérification "
+                f"LLM sera ignorée (classement cosinus seul).")
+    return None
 
 
 if __name__ == "__main__":

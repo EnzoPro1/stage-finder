@@ -55,6 +55,7 @@ import sqlite3
 from datetime import datetime
 
 import config
+import llm
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,10 @@ CONSTANTES_RANKING = (
     # poids : `verifier.VERSION_REGLES` est incrémenté à chaque fois qu'ils
     # changent, c'est donc lui qui les représente.
     "verifier.VERSION_REGLES",
+    # Réglages LLM EFFECTIFS : défauts de config.py APRÈS surcharge par les
+    # variables SF_* (.env compris). Les constantes config.VERIFY_* ci-dessus
+    # ne disent que le défaut déclaré ; ce sont celles-ci qui ont servi.
+    *(f"llm.{nom}" for nom in sorted(llm.ESTAMPILLES)),
 )
 
 

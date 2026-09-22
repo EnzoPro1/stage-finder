@@ -44,8 +44,6 @@ import threading
 import urllib.error
 import urllib.request
 
-import config
-
 logger = logging.getLogger(__name__)
 
 # Un SEUL appel LLM en vol, quel que soit le modèle et quel que soit
@@ -58,7 +56,16 @@ _TIMEOUT_DECHARGEMENT_S = 10
 
 
 def _base_url(url: str | None = None) -> str:
-    return (url or config.VERIFY_OLLAMA_URL).rstrip("/")
+    """URL explicite, sinon celle des réglages effectifs (``SF_OLLAMA_URL``).
+
+    Import tardif : ``llm`` importe ce module pour le jeton, l'inverse au
+    chargement ferait une boucle.
+    """
+    if url:
+        return url.rstrip("/")
+    import llm
+
+    return llm.charger_reglages().ollama_url
 
 
 def decharger(model: str, *, url: str | None = None) -> bool:

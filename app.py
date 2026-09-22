@@ -46,6 +46,7 @@ import console  # noqa: F401 - force UTF-8 sur la console Windows
 import config
 import filters
 import jobs
+import llm
 import main
 import market
 import observabilite
@@ -93,6 +94,11 @@ VERROU = threading.Lock()
 app = Flask(__name__)
 
 
+def _reglages_llm() -> llm.Reglages:
+    """Réglages LLM effectifs (config.py + variables SF_*), relus à chaque usage."""
+    return llm.charger_reglages()
+
+
 # ---------------------------------------------------------------------------
 # Cache disque du classement (affichage instantané au redémarrage)
 # ---------------------------------------------------------------------------
@@ -101,7 +107,7 @@ def _sauver_cache() -> None:
     with VERROU:
         rows = [_row(offre, cos, rang, inclure_desc=True)
                 for rang, (offre, cos) in enumerate(ETAT["classees"], 1)]
-        paquet = {"genere_le": ETAT["genere_le"], "modele": config.VERIFY_MODEL, "offres": rows}
+        paquet = {"genere_le": ETAT["genere_le"], "modele": _reglages_llm().modele, "offres": rows}
     try:
         with open(CHEMIN_CACHE, "w", encoding="utf-8") as f:
             json.dump(paquet, f, ensure_ascii=False)
@@ -273,6 +279,9 @@ def _verifier(n: int, modele: str) -> None:
             v = ETAT["verif"]
             if info["phase"] == "indisponible":
                 v["indisponible"] = True
+            elif info["phase"] == "modele_absent":
+                v["indisponible"] = True
+                v["message"] = info["message"]
             elif info["phase"] == "verif":
                 v.update(fait=info["fait"], total=info["total"],
                          cache=info["cache"], appels=info["appels"])
@@ -317,12 +326,12 @@ def _thread_tout(utiliser_jobspy: bool, n_demande: int | None) -> None:
             logger.warning("Tout lancer : aucune offre collectée, vérification IA sautée.")
             return
 
-        n = max(1, min(n_demande or config.VERIFY_TOP_N, n_offres))
+        n = max(1, min(n_demande or _reglages_llm().top_n, n_offres))
         with VERROU:
             ETAT["auto"]["etape"] = 2
             ETAT["verif"] = {"en_cours": True, "fait": 0, "total": n, "appels": 0,
-                             "cache": 0, "indisponible": False, "modele": config.VERIFY_MODEL}
-        _verifier(n, config.VERIFY_MODEL)
+                             "cache": 0, "indisponible": False, "modele": _reglages_llm().modele}
+        _verifier(n, _reglages_llm().modele)
     finally:
         # Quoi qu'il arrive, on relâche les verrous d'interface : sans ça, un
         # échec laisserait les boutons grisés jusqu'au redémarrage du serveur.
@@ -350,14 +359,14 @@ def api_etat():
             "offres": rows,
             "n_total": len(rows),
             "genere_le": ETAT["genere_le"],
-            "modele": config.VERIFY_MODEL,
+            "modele": _reglages_llm().modele,
             "collecte": dict(ETAT["collecte"]),
             "verif": dict(ETAT["verif"]),
             "auto": dict(ETAT["auto"]),
             "etudiants": dict(ETAT["etudiants"]),
             "libelles": rapport._libelles_familles(),
             "profil": config.REQUETE_REFERENCE,
-            "top_n_defaut": config.VERIFY_TOP_N,
+            "top_n_defaut": _reglages_llm().top_n,
             "sources": config.SOURCES_ACTIVES,
         }
     return jsonify(etat)
@@ -379,7 +388,7 @@ def api_verifier():
     if not n_total:
         return jsonify({"erreur": "Aucun classement. Lance d'abord une recherche."}), 400
 
-    n = (request.get_json(silent=True) or {}).get("n", config.VERIFY_TOP_N)
+    n = (request.get_json(silent=True) or {}).get("n", _reglages_llm().top_n)
     try:
         n = max(1, min(int(n), n_total))
     except (TypeError, ValueError):
@@ -387,8 +396,8 @@ def api_verifier():
 
     with VERROU:
         ETAT["verif"] = {"en_cours": True, "fait": 0, "total": n, "appels": 0,
-                         "cache": 0, "indisponible": False, "modele": config.VERIFY_MODEL}
-    threading.Thread(target=_verifier, args=(n, config.VERIFY_MODEL), daemon=True).start()
+                         "cache": 0, "indisponible": False, "modele": _reglages_llm().modele}
+    threading.Thread(target=_verifier, args=(n, _reglages_llm().modele), daemon=True).start()
     return jsonify({"ok": True, "n": n})
 
 
@@ -456,9 +465,9 @@ def api_tout():
     corps = request.get_json(silent=True) or {}
     utiliser_jobspy = not corps.get("no_jobspy", False)
     try:
-        n = int(corps.get("n", config.VERIFY_TOP_N))
+        n = int(corps.get("n", _reglages_llm().top_n))
     except (TypeError, ValueError):
-        n = config.VERIFY_TOP_N
+        n = _reglages_llm().top_n
 
     threading.Thread(target=_thread_tout, args=(utiliser_jobspy, n), daemon=True).start()
     return jsonify({"ok": True})
@@ -1159,7 +1168,9 @@ function majProgression(){
     const pct = v.total ? Math.round(100*v.fait/v.total) : 0;
     box.style.display = "block"; bar.style.width = pct + "%";
     if (v.indisponible){
-      txt.textContent = "⚠️ Ollama injoignable — démarre `ollama serve`. Classement cosinus conservé.";
+      txt.textContent = v.message
+        ? `⚠️ ${v.message} — classement cosinus conservé hors cache.`
+        : "⚠️ Ollama injoignable — démarre `ollama serve`. Classement cosinus conservé.";
     } else {
       txt.textContent = `${etape}🔎 Vérification IA ${v.fait}/${v.total} (appels ${v.appels}, cache ${v.cache}) — modèle ${v.modele}`;
     }
@@ -1725,6 +1736,11 @@ def demarrer_worker(*, reloader_actif: bool | None = None):
 if __name__ == "__main__":
     _demarrer_logs()
     _charger_cache()
+    # Réglages LLM invalides : arrêt ici (ReglagesInvalides nomme la variable).
+    # Ollama absent ou modèle manquant : simple avertissement, avec la commande.
+    avertissement = llm.diagnostic_demarrage()
+    if avertissement:
+        logger.warning(avertissement)
     demarrer_worker()
     logger.info("Stage Finder web : http://localhost:5000  (Ctrl+C pour arrêter)")
     app.run(host="127.0.0.1", port=5000, threaded=True,

@@ -27,8 +27,10 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
 
 import requests
+from pydantic import BaseModel, ConfigDict
 
 import config
+import llm
 
 if TYPE_CHECKING:  # évite l'import circulaire (normalize n'importe pas verifier)
     from normalize import Offre
@@ -54,28 +56,44 @@ def cle_cache(model: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Schéma JSON attendu d'Ollama (paramètre ``format`` de /api/generate)
+# Schéma de la sortie structurée (paramètre ``format`` d'Ollama, via llm.py)
 # ---------------------------------------------------------------------------
-# Ordre des propriétés VOLONTAIRE : la génération JSON contrainte suit l'ordre du
+# Ordre des champs VOLONTAIRE : la génération JSON contrainte suit l'ordre du
 # schéma, donc on place les champs de « raisonnement » (alternance, niveau,
 # domaine, drapeaux, justification) AVANT le ``score``. Le modèle décide ainsi
 # les violations d'abord, puis attribue la note en connaissance de cause — un
 # petit modèle note bien mieux « à la fin » qu'en tête (où il met 1.0 par défaut).
-VERDICT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "pertinent":       {"type": "boolean"},
-        "est_alternance":  {"type": "boolean"},          # alternance/apprentissage déguisé ?
-        "niveau":          {"type": "string"},           # "stage" | "junior" | "senior" | "inconnu"
-        "domaine_match":   {"type": "boolean"},          # IA/cyber réellement au cœur du poste ?
-        "duree_mois":      {"type": ["integer", "null"]},
-        "date_debut":      {"type": ["string", "null"]},  # ISO ou null
-        "drapeaux_rouges": {"type": "array", "items": {"type": "string"}},
-        "justification":   {"type": "string"},
-        "score":           {"type": "number"},           # 0.0 à 1.0 — EN DERNIER, après décision
-    },
-    "required": ["pertinent", "est_alternance", "niveau", "domaine_match", "justification", "score"],
-}
+#
+# Deux exigences distinctes, qu'un seul modèle Pydantic doit porter :
+# - le schéma ENVOYÉ exige les champs de décision (``_REQUIS``), pour que la
+#   génération contrainte les produise toujours ;
+# - la VALIDATION tolère l'absence de ``domaine_match`` et des champs
+#   descriptifs (défaut ``None``/[]), comme le parsing défensif d'avant.
+# D'où ``json_schema_extra``, qui réécrit la liste ``required`` du schéma.
+# ``score`` n'est PAS borné ici : ``Verdict.from_dict`` le ramène dans [0, 1]
+# plutôt que de jeter un verdict entier pour un 1.2.
+_REQUIS = ["pertinent", "est_alternance", "niveau", "domaine_match", "justification", "score"]
+
+
+class VerdictLLM(BaseModel):
+    """Sortie brute attendue du modèle, avant garde-fous."""
+
+    model_config = ConfigDict(
+        json_schema_extra=lambda schema: schema.update(required=list(_REQUIS)),
+    )
+
+    pertinent: bool
+    est_alternance: bool                 # alternance/apprentissage déguisé ?
+    niveau: str                          # "stage" | "junior" | "senior" | "inconnu"
+    domaine_match: bool | None = None    # IA/cyber réellement au cœur du poste ?
+    duree_mois: int | None = None
+    date_debut: str | None = None        # ISO ou null
+    drapeaux_rouges: list[str] = []
+    justification: str
+    score: float                         # 0.0 à 1.0 — EN DERNIER, après décision
+
+
+VERDICT_SCHEMA = VerdictLLM.model_json_schema()
 
 # Longueur max de description injectée dans le prompt. Les annonces réelles font
 # souvent > 3000 caractères : au-delà, on tronque, pour BORNER le coût
@@ -148,7 +166,8 @@ _MOTIF_CYBER = re.compile(
 # un simple réglage de verbosité. La sortie étant du JSON contraint et le champ
 # ``score`` étant émis EN DERNIER, un budget trop court coupe le JSON avant sa
 # fermeture — et c'est le verdict ENTIER qui devient illisible, pas seulement la
-# justification. On garde donc de la marge (voir config.py).
+# justification. On garde donc de la marge (voir config.py). En filet,
+# ``llm.generer_structure`` double le budget si la réponse revient tronquée.
 
 # Gabarit du prompt. Durci contre les FAUX NÉGATIFS : en cas de doute on signale
 # (drapeau rouge) plutôt que de rejeter — cohérent avec les filtres permissifs.
@@ -277,34 +296,12 @@ def ollama_disponible(url: str | None = None, timeout: float = 3.0) -> bool:
     Sert à l'appelant pour décider UNE fois par run s'il tente la vérification
     LLM ou s'il conserve directement le classement cosinus (dégradation globale).
     """
-    base = (url or config.VERIFY_OLLAMA_URL).rstrip("/")
+    base = (url or llm.charger_reglages().ollama_url).rstrip("/")
     try:
         reponse = requests.get(f"{base}/api/tags", timeout=timeout)
         return reponse.status_code == 200
     except requests.exceptions.RequestException:
         return False
-
-
-def _extraire_json(texte: str) -> dict | None:
-    """Extrait le premier objet JSON d'une chaîne (parsing défensif).
-
-    Avec ``format=VERDICT_SCHEMA``, Ollama renvoie normalement du JSON pur ; on
-    reste néanmoins robuste à un éventuel préambule (ex. balises ``<think>`` d'un
-    modèle « thinking ») en isolant la portion entre la 1re ``{`` et la dernière ``}``.
-    """
-    if not texte:
-        return None
-    try:
-        return json.loads(texte)
-    except ValueError:
-        pass
-    debut, fin = texte.find("{"), texte.rfind("}")
-    if debut != -1 and fin > debut:
-        try:
-            return json.loads(texte[debut : fin + 1])
-        except ValueError:
-            return None
-    return None
 
 
 def verifier(
@@ -313,18 +310,25 @@ def verifier(
     model: str | None = None,
     url: str | None = None,
     timeout: int | None = None,
+    reglages: "llm.Reglages | None" = None,
 ) -> Verdict | None:
     """Fait juger une offre par Ollama et renvoie un ``Verdict`` (ou ``None``).
 
     Accès EXPLICITE aux champs de l'offre (title, company, location, description),
-    jamais ``__dict__``. Tout échec (réseau, timeout, JSON invalide, réponse vide)
-    est absorbé : on log un avertissement et on renvoie ``None`` — l'appelant
-    retombe alors sur le score cosinus (dégradation gracieuse).
+    jamais ``__dict__``. L'appel passe par ``llm.generer_structure`` : réglages
+    centralisés (num_ctx, keep_alive, think…), schéma Pydantic, nouvelles
+    tentatives, jeton Ollama. Tout échec y est TYPÉ ; ici on l'absorbe — on log
+    la cause explicite et on renvoie ``None``, l'appelant retombe alors sur le
+    score cosinus (dégradation gracieuse).
+
+    ``model``, ``url`` et ``timeout`` surchargent les réglages effectifs pour
+    cet appel seulement (option ``--verify-model`` du CLI, tests).
     """
+    r = reglages or llm.charger_reglages()
+    surcharges = {"modele": model, "ollama_url": url.rstrip("/") if url else None,
+                  "timeout_s": timeout}
+    r = r.model_copy(update={k: v for k, v in surcharges.items() if v is not None})
     profil = profil if profil is not None else config.REQUETE_REFERENCE
-    model = model or config.VERIFY_MODEL
-    base = (url or config.VERIFY_OLLAMA_URL).rstrip("/")
-    timeout = timeout if timeout is not None else config.VERIFY_TIMEOUT_S
 
     description = _extrait_pertinent(offre.description or "")
     prompt = _PROMPT.format(
@@ -335,45 +339,17 @@ def verifier(
         description=description,
         n_phrases=config.VERIFY_JUSTIF_PHRASES,
     )
-    charge = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "format": VERDICT_SCHEMA,
-        "think": False,  # désactive le raisonnement (ignoré par les vieux Ollama)
-        "options": {"temperature": 0, "num_predict": config.VERIFY_MAX_TOKENS},
-    }
 
     try:
-        reponse = requests.post(f"{base}/api/generate", json=charge, timeout=timeout)
-        reponse.raise_for_status()
-        brut = reponse.json().get("response", "")
-    except requests.exceptions.RequestException as err:
-        logger.warning("Vérification LLM : appel Ollama en échec (%s).", err)
+        sortie = llm.generer_structure(prompt, VerdictLLM, reglages=r)
+    except llm.SortieStructureeInvalide as err:
+        logger.warning("Vérification LLM de « %s » abandonnée : %s", offre.title, err)
         return None
-    except ValueError:
-        logger.warning("Vérification LLM : réponse Ollama non-JSON.")
+    except llm.ErreurLLM as err:
+        logger.warning("Vérification LLM : %s", err)
         return None
 
-    donnees = _extraire_json(brut)
-    if not isinstance(donnees, dict):
-        # Cas le plus fréquent : le JSON a été coupé net faute de tokens. On le
-        # dit explicitement, sinon le réglage à changer est impossible à deviner.
-        indice = (
-            " (réponse tronquée : augmente VERIFY_MAX_TOKENS)"
-            if brut and not brut.rstrip().endswith("}")
-            else ""
-        )
-        logger.warning(
-            "Vérification LLM : JSON du modèle illisible pour « %s »%s.", offre.title, indice
-        )
-        return None
-
-    try:
-        verdict = Verdict.from_dict(donnees)
-    except Exception as err:  # noqa: BLE001 - un verdict malformé ne casse pas le run
-        logger.warning("Vérification LLM : verdict inexploitable (%s).", err)
-        return None
+    verdict = Verdict.from_dict(sortie.model_dump())
     _plafonner_metier_support(verdict, offre.title)
     _plafonner_violations(verdict)
     return verdict
@@ -456,7 +432,7 @@ if __name__ == "__main__":
         "http://x", "demo", "", "",
     )
     if not ollama_disponible():
-        print("⚠️  Ollama injoignable — lance `ollama serve` puis `ollama pull qwen3:8b`.")
+        print("⚠️  Ollama injoignable — lance `ollama serve` puis `ollama pull qwen3:4b`.")
     else:
         v = verifier(demo)
         print(json.dumps(v.to_dict() if v else None, ensure_ascii=False, indent=2))

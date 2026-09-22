@@ -36,6 +36,10 @@ class _Reponse:
             raise self._payload
         return self._payload
 
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"HTTP {self.status_code}")
+
 
 class FauxOllama:
     """Rejoue ``reponses`` dans l'ordre ; garde chaque (url, charge) reçue."""

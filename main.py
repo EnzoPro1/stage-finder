@@ -33,6 +33,7 @@ from normalize import Offre, normaliser, source_affichee
 from filters import filtrer
 import dedup
 import extract
+import llm
 import observabilite
 import ranker
 import rapport
@@ -294,7 +295,9 @@ def verifier_shortlist(
     affichage : le CLI branche une barre console, l'app web une barre HTTP.
     Source de vérité unique partagée par ``executer`` et ``app.py``.
     """
-    url = url or config.VERIFY_OLLAMA_URL
+    reglages = llm.charger_reglages()
+    url = (url or reglages.ollama_url).rstrip("/")
+    reglages = reglages.model_copy(update={"ollama_url": url, "modele": model})
 
     if not verifier.ollama_disponible(url):
         if on_progress:
@@ -306,6 +309,11 @@ def verifier_shortlist(
     total = len(shortlist)
     verifiees: list[tuple[Offre, float]] = []
     nb_appels = nb_cache = nb_echecs = 0
+    # Présence du modèle : vérifiée au PREMIER défaut de cache seulement. Un
+    # run servi entièrement par le cache n'a pas besoin du modèle ; un modèle
+    # absent, lui, ferait échouer chaque offre une à une — on le dit une fois
+    # et on garde le cosinus pour tout ce qui n'est pas en cache.
+    modele_controle = modele_absent = False
 
     # Clé de cache VERSIONNÉE : durcir le prompt doit invalider les anciens
     # verdicts, sinon les offres déjà vues ressortent avec leur jugement périmé.
@@ -318,12 +326,18 @@ def verifier_shortlist(
             verdict = verifier.Verdict.from_dict(cache)
             nb_cache += 1
         else:
-            verdict = verifier.verifier(offre, config.REQUETE_REFERENCE, model=model, url=url)
-            nb_appels += 1
-            if verdict is None:
-                nb_echecs += 1
-            elif conn is not None:
-                storage.save_verdict(conn, empreinte, cle_modele, verdict.to_dict())
+            if not modele_controle:
+                modele_controle = True
+                modele_absent = _signaler_modele_absent(model, reglages, on_progress)
+            verdict = None
+            if not modele_absent:
+                verdict = verifier.verifier(offre, config.REQUETE_REFERENCE,
+                                            model=model, url=url, reglages=reglages)
+                nb_appels += 1
+                if verdict is None:
+                    nb_echecs += 1
+                elif conn is not None:
+                    storage.save_verdict(conn, empreinte, cle_modele, verdict.to_dict())
 
         offre.verdict = verdict
         verifiees.append((offre, verifier.score_final(score, verdict)))
@@ -343,6 +357,20 @@ def verifier_shortlist(
     return fusion
 
 
+def _signaler_modele_absent(model: str, reglages, on_progress) -> bool:
+    """Vrai si ``model`` manque dans Ollama ; le signale alors via ``on_progress``."""
+    try:
+        manquants = llm.modeles_manquants([model], reglages)
+    except llm.OllamaIndisponible:
+        # Le ping vient de répondre : panne passagère. On laisse les appels
+        # tenter leur chance, chacun échouera proprement s'il le faut.
+        return False
+    if manquants and on_progress:
+        on_progress({"phase": "modele_absent",
+                     "message": llm.message_modeles_manquants(manquants)})
+    return bool(manquants)
+
+
 def _progress_cli(info: dict) -> None:
     """Callback de progression pour la vérif LLM en CLI (barre + logs)."""
     phase = info.get("phase")
@@ -351,6 +379,9 @@ def _progress_cli(info: dict) -> None:
             "Ollama injoignable (%s) : vérification LLM ignorée, classement "
             "cosinus conservé. (démarre `ollama serve` pour l'activer)", info["url"],
         )
+    elif phase == "modele_absent":
+        logger.warning("%s — offres hors cache : classement cosinus conservé.",
+                       info["message"])
     elif phase == "verif":
         print(f"\r  🔎 Vérification LLM {info['fait']}/{info['total']}"
               f"  (cache {info['cache']}, appels {info['appels']})…", end="", flush=True)
@@ -365,8 +396,10 @@ def _progress_cli(info: dict) -> None:
 
 def executer(args: argparse.Namespace) -> None:
     """Déroule le pipeline complet de bout en bout."""
-    # 0) Garde-fou : la config est-elle cohérente ? (fail-fast si non)
+    # 0) Garde-fou : la config est-elle cohérente ? (fail-fast si non). Les
+    #    réglages LLM effectifs aussi : une variable SF_* invalide s'arrête ici.
     valider_config()
+    reglages = llm.charger_reglages()
 
     if args.jobs_etudiants:
         import jobs_etudiants
@@ -374,6 +407,14 @@ def executer(args: argparse.Namespace) -> None:
                                 chemin_base=None if args.no_db else config.CHEMIN_BASE_JOBS,
                                 chemin_rapport=args.html)
         return
+
+    # Ollama prêt ? Dit AVANT des minutes de collecte, avec la commande qui répare.
+    verification = config.VERIFY_ENABLED and not args.no_verify
+    if verification:
+        avertissement = llm.diagnostic_demarrage(
+            [args.verify_model or reglages.modele], reglages)
+        if avertissement:
+            logger.warning(avertissement)
 
     # 1-6) Collecte -> ... -> Ranking cosinus (sans IA)
     classees = collecter_et_classer(utiliser_jobspy=not args.no_jobspy)
@@ -395,11 +436,11 @@ def executer(args: argparse.Namespace) -> None:
 
     # 7a) Vérification LLM : enrichit chaque offre de la shortlist d'un verdict
     #     explicable et recompose le score (cosinus + LLM). Optionnelle.
-    if config.VERIFY_ENABLED and not args.no_verify:
+    if verification:
         classees = verifier_shortlist(
             classees, conn,
-            top_n=args.verify_top_n or config.VERIFY_TOP_N,
-            model=args.verify_model or config.VERIFY_MODEL,
+            top_n=args.verify_top_n or reglages.top_n,
+            model=args.verify_model or reglages.modele,
             on_progress=_progress_cli,
         )
 
@@ -451,9 +492,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--no-verify", action="store_true",
                    help="Désactive la vérification LLM (pipeline cosinus seul).")
     p.add_argument("--verify-model", default=None,
-                   help=f"Modèle Ollama de vérification (défaut : {config.VERIFY_MODEL}).")
+                   help=f"Modèle Ollama de vérification (défaut : {config.VERIFY_MODEL}, ou SF_LLM_MODEL).")
     p.add_argument("--verify-top-n", type=int, default=None,
-                   help=f"Taille de la shortlist vérifiée (défaut : {config.VERIFY_TOP_N}).")
+                   help=f"Taille de la shortlist vérifiée (défaut : {config.VERIFY_TOP_N}, ou SF_LLM_TOP_N).")
     return p
 
 
