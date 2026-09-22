@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from collections.abc import Mapping
 from typing import TypeVar
@@ -56,6 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 import config
 import ollama_pool
+import reglages_env
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class ErreurLLM(Exception):
     """Racine des erreurs de ce module."""
 
 
-class ReglagesInvalides(ErreurLLM):
+class ReglagesInvalides(ErreurLLM, reglages_env.ReglagesInvalides):
     """Une variable d'environnement (ou une constante) a une valeur refusée."""
 
 
@@ -226,31 +226,12 @@ def reglages_par_defaut() -> dict:
 def charger_reglages(env: Mapping[str, str] | None = None) -> Reglages:
     """Réglages effectifs. ``env=None`` : ``os.environ``, après lecture du ``.env``.
 
-    Une variable vide est ignorée : une ligne ``SF_LLM_MODEL=`` recopiée de
-    ``.env.example`` sans être remplie ne doit pas écraser le défaut.
+    Mécanisme commun à tous les réglages surchargeables : ``reglages_env``.
     """
-    if env is None:
-        from dotenv import load_dotenv
-
-        load_dotenv()  # n'écrase pas une variable déjà posée dans le shell
-        env = os.environ
-
-    valeurs = reglages_par_defaut()
-    for champ, variable in VARIABLES_ENV.items():
-        brut = env.get(variable)
-        if brut is not None and brut.strip():
-            valeurs[champ] = brut.strip()
-
-    try:
-        return Reglages(**valeurs)
-    except ValidationError as err:
-        problemes = []
-        for e in err.errors():
-            champ = str(e["loc"][0]) if e["loc"] else "?"
-            variable = VARIABLES_ENV.get(champ, champ)
-            source = variable if env.get(variable, "").strip() else f"config.py ({champ})"
-            problemes.append(f"{source} = {valeurs.get(champ)!r} : {e['msg']}")
-        raise ReglagesInvalides("Réglages LLM invalides — " + " ; ".join(problemes)) from None
+    return reglages_env.construire(
+        Reglages, reglages_par_defaut(), VARIABLES_ENV, env,
+        libelle="Réglages LLM", erreur=ReglagesInvalides,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -561,6 +561,9 @@ def test_demander_refuse_un_master_introuvable(conn, tmp_path):
         jobs.demander(conn, "cle-a", master_path=tmp_path / "nulle-part.yaml",
                       config=FauxConfig())
     assert capture.value.code == "MASTER_INVALID"
+    # Le message dit OÙ le master est attendu et QUELLE variable changer.
+    assert str(tmp_path / "nulle-part.yaml") in capture.value.message
+    assert "SF_CV_MASTER_PATH" in capture.value.message
     assert conn.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0] == 0
 
 

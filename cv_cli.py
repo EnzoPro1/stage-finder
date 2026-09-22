@@ -17,10 +17,10 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from pathlib import Path
 
 import config
 import jobs
+import reglages_cv
 import storage
 import worker as worker_module
 
@@ -163,7 +163,7 @@ def cmd_enfiler(args) -> int:
     try:
         job, reutilise = jobs.demander(
             conn, offre["cle"],
-            master_path=Path(config.CV_MASTER_PATH), config=ForgeConfig(),
+            master_path=reglages_cv.master_path(), config=ForgeConfig(),
         )
     except jobs.DemandeRefusee as refus:
         print(f"Erreur [{refus.code}] : {refus.message}", file=sys.stderr)
@@ -295,7 +295,7 @@ def cmd_batch(args) -> int:
 
     from cv_forge import ForgeConfig
 
-    master = Path(config.CV_MASTER_PATH)
+    master = reglages_cv.master_path()
     forge = ForgeConfig()
 
     # Les meilleures d'abord : `dernier_score` est le score du dernier run.

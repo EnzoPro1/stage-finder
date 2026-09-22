@@ -29,3 +29,32 @@ def charger_fixture():
         with open(FIXTURES / f"{nom}.json", "r", encoding="utf-8") as f:
             return json.load(f)
     return _charger
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "config_reelle: le test lit la configuration RÉELLE du poste (.env et "
+        "variables SF_* compris) au lieu d'un environnement neutre.",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _environnement_neutre(request, monkeypatch):
+    """Les variables SF_* du poste (shell ou .env) ne décident d'aucun test.
+
+    Sans ce filet, poser ``SF_LLM_MODEL=gemma3:4b`` dans son .env ferait
+    échouer les tests qui vérifient les défauts — ou pire, les ferait passer
+    pour de mauvaises raisons. Les tests qui veulent une variable la posent
+    eux-mêmes (``monkeypatch.setenv``). Exception : le marqueur
+    ``config_reelle``, dont c'est précisément le sujet.
+    """
+    if request.node.get_closest_marker("config_reelle"):
+        return
+    import os
+
+    import reglages_env
+
+    monkeypatch.setattr(reglages_env, "_lire_dotenv", lambda: None)
+    for nom in [n for n in os.environ if n.startswith("SF_")]:
+        monkeypatch.delenv(nom)

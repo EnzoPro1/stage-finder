@@ -28,7 +28,11 @@ from pathlib import Path
 import pytest
 
 import config
+import reglages_cv
 import worker
+
+# La configuration RÉELLE, .env compris : c'est le sujet de ce fichier.
+pytestmark = pytest.mark.config_reelle
 
 
 # =====================================================================
@@ -59,13 +63,19 @@ def test_les_chemins_sont_absolus(nom):
     assert getattr(config, nom).is_absolute()
 
 
+def test_les_chemins_effectifs_sont_valides():
+    """Défauts de config.py APRÈS surcharge par SF_CV_* : c'est ce que le
+    worker utilisera. Une variable mal remplie lève en la nommant."""
+    r = reglages_cv.charger_reglages()
+    assert r.master_path.is_absolute() and r.out_root.is_absolute()
+
+
 def test_le_master_existe_sur_le_disque():
     """Sans lui, chaque génération échouerait en MASTER_INVALID — proprement,
-    mais toutes. Autant le savoir ici."""
-    assert config.CV_MASTER_PATH.is_file(), (
-        f"master introuvable : {config.CV_MASTER_PATH}\n"
-        f"  Ajustez config.CV_MASTER_PATH, ou vérifiez le dépôt cv_forge."
-    )
+    mais toutes. Autant le savoir ici. On vérifie le chemin EFFECTIF : celui
+    du .env s'il y en a un, sinon le défaut de config.py."""
+    chemin = reglages_cv.master_path()
+    assert chemin.is_file(), reglages_cv.message_master_absent(chemin)
 
 
 # Marqueurs de nom trahissant une constante de CHEMIN. Les français sont

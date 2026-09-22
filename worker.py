@@ -47,6 +47,7 @@ import config
 import embeddings_env
 import jobs
 import ollama_pool
+import reglages_cv
 import storage
 import titre_offre
 
@@ -195,8 +196,8 @@ class Worker:
         # tests, qui injectent toujours, ne pouvaient pas voir le défaut —
         # la chaîne était verte avec une configuration inutilisable.
         # `Path(Path(...))` est l'identité, donc les deux branches sont sûres.
-        self.master_path = Path(master_path or config.CV_MASTER_PATH)
-        self.out_root = Path(out_root or config.CV_OUT_ROOT)
+        self.master_path = Path(master_path or reglages_cv.master_path())
+        self.out_root = Path(out_root or reglages_cv.out_root())
         self._forge_config = forge_config
         self.intervalle = intervalle
 

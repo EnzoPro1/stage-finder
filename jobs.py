@@ -36,6 +36,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import reglages_cv
+
 logger = logging.getLogger(__name__)
 
 STATUTS = ("pending", "running", "done", "failed")
@@ -249,8 +251,7 @@ def demander(
         # l'enverrait lire une pile pour une ligne de `config.py`.
         raise DemandeRefusee(
             "MASTER_INVALID",
-            f"master introuvable : {master_path}. Vérifiez `CV_MASTER_PATH` "
-            f"dans config.py.",
+            reglages_cv.message_master_absent(master_path),
         )
 
     return enfiler(conn, offer_id, calculer_hash(texte, master_path=Path(master_path),

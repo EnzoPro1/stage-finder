@@ -51,6 +51,7 @@ import main
 import market
 import observabilite
 import rapport
+import reglages_cv
 import storage
 import verifier
 import worker as worker_module
@@ -576,7 +577,7 @@ CATALOGUE_ERREURS = CODES_CV_FORGE | CODES_STAGE_FINDER
 #   404 l'offre n'existe pas — la clé désigne du vide ;
 #   422 l'offre existe mais n'est pas traitable en l'état (rien à envoyer
 #       au modèle). Ni une faute du client, ni une panne du serveur ;
-#   503 le SERVEUR n'est pas configuré : `CV_MASTER_PATH` ne désigne
+#   503 le SERVEUR n'est pas configuré : `SF_CV_MASTER_PATH` ne désigne
 #       aucun fichier. Le client n'y peut rien, réessayer plus tard
 #       éventuellement — c'est exactement 503.
 _HTTP_PAR_REFUS = {
@@ -685,7 +686,7 @@ def _resoudre_pdf(pdf_path: str) -> tuple[Path | None, str | None]:
     ou un lien symbolique passerait la comparaison textuelle tout en
     désignant un fichier hors racine.
     """
-    racine = Path(config.CV_OUT_ROOT).resolve()
+    racine = reglages_cv.out_root().resolve()
     chemin = Path(pdf_path).resolve()
     if not chemin.is_relative_to(racine):
         return None, "hors_racine"
@@ -722,7 +723,7 @@ def api_cv_demander(offer_id: str):
     try:
         job, reutilise = jobs.demander(
             conn, offer_id,
-            master_path=Path(config.CV_MASTER_PATH), config=ForgeConfig(),
+            master_path=reglages_cv.master_path(), config=ForgeConfig(),
         )
     except jobs.DemandeRefusee as refus:
         return _erreur(refus.code, refus.message, _HTTP_PAR_REFUS[refus.code])
