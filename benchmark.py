@@ -91,7 +91,8 @@ def main() -> None:
     args = parser.parse_args()
 
     chemin_db = args.db or reference.base_par_defaut()
-    conn = storage.ouvrir(chemin_db)
+    # Lecture seule : `storage.ouvrir` écrirait dans l'instantané (WAL, schéma).
+    conn = storage.ouvrir_lecture_seule(chemin_db)
     try:
         corpus = evaluer_ranking.charger_corpus(conn, args.etiquettes)
     finally:

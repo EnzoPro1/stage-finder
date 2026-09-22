@@ -42,6 +42,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+from pathlib import Path
 from datetime import date, datetime
 
 import config
@@ -148,6 +149,29 @@ def ouvrir(chemin: str | None = None) -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     _ajouter_colonnes_manquantes(conn)
     conn.commit()
+    return conn
+
+
+def ouvrir_lecture_seule(chemin: str) -> sqlite3.Connection:
+    """Ouvre une base SANS jamais y écrire — pour mesurer sur un instantané.
+
+    ``ouvrir`` ne convient pas : il pose ``journal_mode=WAL``, crée le schéma
+    et ajoute les colonnes manquantes, c'est-à-dire qu'il ÉCRIT dans le
+    fichier. Sur l'instantané de référence, cela changerait l'objet même
+    qu'on prétend mesurer à l'identique.
+
+    ``mode=ro`` interdit l'écriture ; ``immutable=1`` interdit en plus la
+    création des fichiers ``-wal`` / ``-shm`` qu'une base en WAL fait
+    apparaître à côté d'elle même en lecture seule (constaté). C'est sûr
+    tant que personne n'écrit la base pendant la lecture — la définition
+    même d'un instantané figé. Lève si le fichier n'existe pas, au lieu de
+    créer une base vide comme le ferait ``sqlite3.connect``.
+    """
+    chemin_absolu = Path(chemin).resolve()
+    if not chemin_absolu.is_file():
+        raise FileNotFoundError(f"base introuvable : {chemin_absolu}")
+    conn = sqlite3.connect(f"file:{chemin_absolu.as_posix()}?mode=ro&immutable=1", uri=True)
+    conn.row_factory = sqlite3.Row
     return conn
 
 

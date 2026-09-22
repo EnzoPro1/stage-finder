@@ -48,6 +48,8 @@ stages.avant-*.db
 # c'est lui qui permet de dire depuis un clone si un rapport a été calculé
 # sur la bonne base.
 stages.reference-*.db
+stages.reference-*.db-wal
+stages.reference-*.db-shm
 .reference.json.tmp
 .rank_cache.json
 # Cache des embeddings Ollama (`cache_embeddings.py`) : régénérable, et il
