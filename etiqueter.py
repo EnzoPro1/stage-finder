@@ -28,6 +28,31 @@ raison l'ordre de présentation est MÉLANGÉ (graine fixe, affichée au
 démarrage) : présenter par score décroissant induirait un « oui » en tête et un
 « non » en queue.
 
+## Provenance : deux pools de jugements qui ne se mélangent jamais
+
+Ce corpus-ci est étiqueté À L'AVEUGLE et sert à MESURER le ranking. Le journal
+de `feedback.py` recueille des retours EN VOYANT le classement et sert à
+l'AMÉLIORER. Les mélanger reviendrait à noter sa copie avec le corrigé qu'on a
+soi-même écrit : la métrique cesserait de mesurer quoi que ce soit, et — plus
+grave — elle continuerait à rendre un chiffre plausible.
+
+Chaque étiquette porte donc une `provenance`. Trois barrières, du plus dur au
+plus souple :
+
+1. **Supports distincts** — le corpus vit dans un FICHIER versionné, le
+   feedback dans une table de la base vive. Une fuite exigerait une écriture
+   physique dans `etiquettes.json`, que rien dans le projet ne fait.
+2. **`CHECK` en base** — la table `etiquettes` refuse `in_app_feedback` ; le
+   cache ne peut pas être pollué même par un `--import` d'un JSON altéré.
+3. **`verifier_provenance`, qui LÈVE** — appelée par
+   `evaluer_ranking.charger_corpus`. Filtrer silencieusement rendrait une
+   mesure amputée d'un nombre inconnu d'étiquettes ; une étiquette étrangère
+   dans ce fichier est un bug, pas un cas de figure.
+
+`charger_json` reste PERMISSIF, lui, et c'est délibéré : il faut pouvoir lire
+un fichier pollué pour le diagnostiquer et le réparer. Le refus est posé à la
+frontière de la MESURE, pas de la lecture.
+
 ## Clé d'étiquetage
 
 `offres.cle` — sha1(titre normalisé | entreprise | ville), cf. `dedup._cle`.
@@ -63,6 +88,15 @@ logger = logging.getLogger(__name__)
 
 CHEMIN_JSON = "etiquettes.json"
 
+# Provenances d'un jugement. Le corpus de mesure n'accepte QUE la première.
+#
+# `PROVENANCE_FEEDBACK` n'est jamais écrite par ce module : elle est nommée ici
+# parce que c'est ici qu'elle est REFUSÉE, et une constante partagée vaut mieux
+# qu'une chaîne recopiée dans un `CHECK`, dans un test et dans le module d'en
+# face — trois endroits qui divergeraient au premier renommage.
+PROVENANCE_CORPUS = "corpus_aveugle"
+PROVENANCE_FEEDBACK = "in_app_feedback"
+
 # Graine de mélange de l'ordre de présentation. FIXE et affichée : deux
 # sessions présentent les mêmes offres dans le même ordre, ce qui rend une
 # session interrompue reprenable à l'identique, et le corpus reproductible
@@ -85,7 +119,7 @@ VIVIER_COURTS = 10
 VIVIER_LONGS = 10
 
 
-_SCHEMA = """
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS etiquettes (
     cle         TEXT PRIMARY KEY,
     pertinent   INTEGER NOT NULL CHECK (pertinent IN (0, 1)),
@@ -97,14 +131,73 @@ CREATE TABLE IF NOT EXISTS etiquettes (
     -- à la main plutôt que de la perdre.
     title       TEXT NOT NULL,
     company     TEXT NOT NULL,
-    url         TEXT NOT NULL
+    url         TEXT NOT NULL,
+    -- Barrière n°2 (cf. en-tête). Contrainte NÉGATIVE ici, là où la barrière
+    -- n°3 (`verifier_provenance`) est une liste blanche — et l'asymétrie est
+    -- voulue : migrer une contrainte de table coûte une réécriture, alors
+    -- qu'une campagne d'étiquetage en aveugle qui porterait un autre nom doit
+    -- pouvoir entrer en base tout en se signalant à la MESURE.
+    provenance  TEXT NOT NULL DEFAULT '{PROVENANCE_CORPUS}'
+                CHECK (provenance <> '{PROVENANCE_FEEDBACK}')
 );
 """
 
 
+class ProvenanceEtrangere(RuntimeError):
+    """Une étiquette du corpus de mesure ne vient pas de l'étiquetage à l'aveugle.
+
+    Signale une FUITE entre les deux pools de jugements, pas un aléa : le
+    corpus est censé être gelé et n'être alimenté que par `session()`.
+    """
+
+    def __init__(self, coupables: dict[str, str]) -> None:
+        detail = ", ".join(f"{cle[:12]} ({prov})"
+                           for cle, prov in sorted(coupables.items())[:5])
+        super().__init__(
+            f"{len(coupables)} étiquette(s) de provenance étrangère dans le corpus "
+            f"d'évaluation : {detail}"
+            f"{' …' if len(coupables) > 5 else ''}. "
+            f"Le corpus en aveugle n'accepte que « {PROVENANCE_CORPUS} » ; le "
+            f"feedback in-app vit dans `feedback_events` et n'entre jamais dans "
+            f"la mesure."
+        )
+        self.coupables = coupables
+
+
+def verifier_provenance(etiquettes: dict[str, dict]) -> None:
+    """LÈVE si une étiquette ne vient pas de l'étiquetage à l'aveugle.
+
+    Barrière n°3, posée à la frontière de la MESURE. Elle lève plutôt que de
+    filtrer : une mesure amputée d'un nombre inconnu d'étiquettes rendrait un
+    `precision@10` qui a l'air normal et ne veut plus rien dire — exactement
+    le mode de panne que tout ce module existe pour empêcher.
+    """
+    coupables = {
+        cle: e.get("provenance", PROVENANCE_CORPUS)
+        for cle, e in etiquettes.items()
+        if e.get("provenance", PROVENANCE_CORPUS) != PROVENANCE_CORPUS
+    }
+    if coupables:
+        raise ProvenanceEtrangere(coupables)
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Crée la table si besoin. Idempotente, sûre à chaque démarrage."""
+    """Crée la table si besoin, et la migre. Idempotente, sûre à chaque démarrage.
+
+    La migration ajoute `provenance` aux bases antérieures. Les étiquettes
+    déjà posées viennent forcément de `session()`, donc de l'étiquetage à
+    l'aveugle : le `DEFAULT` les rétro-remplit correctement, et le faire ici
+    plutôt que dans un script ponctuel évite d'avoir à s'en souvenir sur les
+    trois bases de sauvegarde qui traînent à la racine.
+    """
     conn.executescript(_SCHEMA)
+    colonnes = {ligne[1] for ligne in conn.execute("PRAGMA table_info(etiquettes)")}
+    if "provenance" not in colonnes:
+        conn.execute(
+            f"""ALTER TABLE etiquettes ADD COLUMN provenance TEXT NOT NULL
+                DEFAULT '{PROVENANCE_CORPUS}'
+                CHECK (provenance <> '{PROVENANCE_FEEDBACK}')"""
+        )
     conn.commit()
 
 
@@ -112,7 +205,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 # Lecture / écriture de la table
 # ---------------------------------------------------------------------------
 def lire_etiquettes(conn: sqlite3.Connection) -> dict[str, dict]:
-    """``cle -> {pertinent, etiquete_le, title, company, url}``, ordre par clé."""
+    """``cle -> {pertinent, etiquete_le, title, company, url, provenance}``, par clé."""
     ensure_schema(conn)
     return {
         ligne["cle"]: {
@@ -122,12 +215,14 @@ def lire_etiquettes(conn: sqlite3.Connection) -> dict[str, dict]:
             "title": ligne["title"],
             "company": ligne["company"],
             "url": ligne["url"],
+            "provenance": ligne["provenance"],
         }
         for ligne in conn.execute("SELECT * FROM etiquettes ORDER BY cle")
     }
 
 
-def enregistrer_etiquette(conn: sqlite3.Connection, offre: dict, pertinent: int) -> None:
+def enregistrer_etiquette(conn: sqlite3.Connection, offre: dict, pertinent: int,
+                          provenance: str = PROVENANCE_CORPUS) -> None:
     """Écrit (ou remplace) l'étiquette d'une offre. Validée immédiatement.
 
     Une étiquette par étiquette, et commit à chaque fois : une session de
@@ -137,12 +232,13 @@ def enregistrer_etiquette(conn: sqlite3.Connection, offre: dict, pertinent: int)
     ensure_schema(conn)
     conn.execute(
         """INSERT OR REPLACE INTO etiquettes
-           (cle, pertinent, etiquete_le, title, company, url)
-           VALUES (?,?,?,?,?,?)""",
+           (cle, pertinent, etiquete_le, title, company, url, provenance)
+           VALUES (?,?,?,?,?,?,?)""",
         (
             offre["cle"], int(pertinent),
             datetime.now().isoformat(timespec="seconds"),
             offre["title"] or "", offre["company"] or "", offre["url"] or "",
+            provenance,
         ),
     )
     conn.commit()
@@ -166,6 +262,10 @@ def _serialiser(etiquettes: dict[str, dict]) -> str:
             "company": e["company"],
             "url": e["url"],
             "etiquete_le": e["etiquete_le"],
+            # EN DERNIER, délibérément : ajouté après coup à un fichier de 57
+            # entrées, il produit ainsi une ligne ajoutée par étiquette au lieu
+            # de remanier l'ordre des champs de chacune.
+            "provenance": e.get("provenance", PROVENANCE_CORPUS),
         }
         for _, e in sorted(etiquettes.items())
     ]
@@ -186,7 +286,16 @@ def exporter_json(etiquettes: dict[str, dict], chemin: str = CHEMIN_JSON) -> int
 
 
 def charger_json(chemin: str = CHEMIN_JSON) -> dict[str, dict]:
-    """Lit le corpus depuis le JSON. ``{}`` si le fichier n'existe pas."""
+    """Lit le corpus depuis le JSON. ``{}`` si le fichier n'existe pas.
+
+    PERMISSIF sur la provenance, et c'est voulu (cf. en-tête) : un fichier
+    pollué doit pouvoir être LU pour être diagnostiqué et réparé. Le refus est
+    posé par ``verifier_provenance``, à la frontière de la mesure.
+
+    Une entrée sans le champ est rétro-remplie à ``corpus_aveugle`` : le champ
+    n'existait pas quand les 57 premières étiquettes ont été posées, et elles
+    viennent toutes de `session()`.
+    """
     if not os.path.exists(chemin):
         return {}
     with open(chemin, "r", encoding="utf-8") as f:
@@ -203,6 +312,7 @@ def charger_json(chemin: str = CHEMIN_JSON) -> dict[str, dict]:
             "title": item.get("title", ""),
             "company": item.get("company", ""),
             "url": item.get("url", ""),
+            "provenance": item.get("provenance", PROVENANCE_CORPUS),
         }
     return corpus
 
@@ -217,9 +327,13 @@ def diff_import(conn: sqlite3.Connection, chemin: str = CHEMIN_JSON) -> dict:
     actuel = lire_etiquettes(conn)
     ajouts = sorted(set(voulu) - set(actuel))
     suppressions = sorted(set(actuel) - set(voulu))
+    # Un changement de provenance EST une modification : sans ça, une étiquette
+    # requalifiée passerait pour « inchangée » alors que c'est exactement le
+    # genre de mouvement qu'on veut voir.
     modifications = sorted(
         c for c in set(voulu) & set(actuel)
         if voulu[c]["pertinent"] != actuel[c]["pertinent"]
+        or voulu[c].get("provenance", PROVENANCE_CORPUS) != actuel[c]["provenance"]
     )
     connues = {ligne["cle"] for ligne in conn.execute("SELECT cle FROM offres")}
     return {
@@ -228,6 +342,13 @@ def diff_import(conn: sqlite3.Connection, chemin: str = CHEMIN_JSON) -> dict:
         "suppressions": suppressions,
         "inchangees": len(set(voulu) & set(actuel)) - len(modifications),
         "orphelines": sorted(c for c in voulu if c not in connues),
+        # Annoncé DÈS LA SIMULATION : sans ça, une pollution du JSON ne se
+        # révélerait qu'au `--apply`, sous la forme d'une erreur `CHECK
+        # constraint failed` qui ne dit pas quelle étiquette est en cause.
+        "etrangeres": sorted(
+            c for c, e in voulu.items()
+            if e.get("provenance", PROVENANCE_CORPUS) != PROVENANCE_CORPUS
+        ),
         "voulu": voulu,
     }
 
@@ -255,12 +376,17 @@ def importer_json(
 
     ensure_schema(conn)
     conn.execute("DELETE FROM etiquettes")
+    # Le `CHECK` de la table fait ici son office : importer un JSON qui aurait
+    # été pollué par du feedback in-app ÉCHOUE, au lieu de peupler le cache de
+    # mesure avec des jugements portés en voyant le classement.
     conn.executemany(
-        """INSERT INTO etiquettes (cle, pertinent, etiquete_le, title, company, url)
-           VALUES (?,?,?,?,?,?)""",
+        """INSERT INTO etiquettes
+           (cle, pertinent, etiquete_le, title, company, url, provenance)
+           VALUES (?,?,?,?,?,?,?)""",
         [
             (e["cle"], int(e["pertinent"]), e["etiquete_le"],
-             e["title"], e["company"], e["url"])
+             e["title"], e["company"], e["url"],
+             e.get("provenance", PROVENANCE_CORPUS))
             for _, e in sorted(voulu.items())
         ],
     )
@@ -537,6 +663,13 @@ def _afficher_rapport_import(rapport: dict, chemin: str) -> None:
     if rapport["orphelines"]:
         print(f"  ⚠ {len(rapport['orphelines'])} étiquette(s) sans offre correspondante "
               f"dans `offres` : conservées, rattachables par title/company/url.")
+    if rapport["etrangeres"]:
+        print(f"\n  ⛔ {len(rapport['etrangeres'])} étiquette(s) de provenance "
+              f"ÉTRANGÈRE dans {chemin} — l'import ÉCHOUERA :")
+        for cle in rapport["etrangeres"][:5]:
+            print(f"      {cle}")
+        print(f"  Le corpus de mesure n'accepte que « {PROVENANCE_CORPUS} ». "
+              f"Le feedback in-app se lit avec `python feedback.py --etat`.")
     if not rapport["applique"] and (rapport["ajouts"] or rapport["modifications"]
                                     or rapport["suppressions"]):
         print("  → relance avec --apply pour écrire.")

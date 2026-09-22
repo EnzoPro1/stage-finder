@@ -34,6 +34,47 @@ Le verdict LLM (décision D3). Le baseline est le cosinus seul
 seulement portaient un verdict : un chiffre mêlant les deux mesurerait surtout
 qui a eu la chance d'être dans la shortlist.
 
+**Et TOUT CE QUI PRÉCÈDE LE CORPUS.** `evaluer_corpus` part des offres déjà
+étiquetées et appelle `ranker.classer` : il ne traverse ni `main.collecter`, ni
+`filters.filtrer`, ni `dedup`. Le harnais est donc structurellement AVEUGLE à
+l'étage de collecte — quelles sources répondent, ce que les filtres durs
+éliminent, ce que la déduplication fusionne, et de quelles sources le corpus
+est composé.
+
+Ce n'est pas un défaut, c'est la condition de la reproductibilité : mesurer le
+classement exige un corpus figé. Mais deux conséquences doivent être lues
+explicitement, parce qu'elles se déguisent en bonne nouvelle.
+
+**1. « conforme » ne veut pas dire « rien n'a bougé ».** Le contrôle de
+`reference.py` porte sur l'empreinte des DONNÉES de l'instantané et sur les
+CONSTANTES DE SCORE. Un changement d'étage de collecte laisse les deux
+intacts, et le rapport affiche « conforme » alors que le pipeline réel ne
+collecte plus la même chose. Vérifié le 2026-09-05 : le remplacement de la
+liste blanche géographique par le référentiel `communes.py` a récupéré 23
+offres sur 448 en collecte et 9 sur un run réel — et n'a pas déplacé d'un
+octet la sortie de ce harnais.
+
+**2. Le corpus n'est pas représentatif du gisement.** Ses 57 étiquettes
+viennent de careerjet (24), jobspy:linkedin (19), jobspy:indeed (12) et
+free_work (2). **Aucune de France Travail ni d'Adzuna** — parce que ces deux
+sources ne rapportaient rien au mode stage au moment de l'étiquetage
+(cf. `SPEC_sources_muettes.md`). Les métriques ci-dessous décrivent donc le
+classement sur un gisement amputé de ses deux plus grosses sources françaises.
+
+### L'instrument de l'autre moitié
+
+Ce qui échappe à ce harnais se mesure avec le **relevé par source**
+(`observabilite.py`), affiché en fin de collecte : brut → normalisé →
+survivant par source, motifs de rejet, incidents, et alertes quand une source
+rend beaucoup et ne garde rien. Les deux se lisent ENSEMBLE — l'un dit si le
+classement est bon, l'autre dit sur quoi il a classé. Aucun des deux ne
+remplace l'autre, et c'est le second qui manquait quand Jooble a passé sept
+semaines à ne rien rapporter sans que personne ne le voie.
+
+Angle mort résiduel, à ne pas oublier : le relevé compte les survivantes
+AVANT `dedup`, qui tourne après `filters.filtrer`. Les offres perdues par la
+déduplication floue n'apparaissent donc dans aucun des deux instruments.
+
 Utilisation :
     python evaluer_ranking.py                    # rapport texte
     python evaluer_ranking.py --json rapport.json
@@ -76,8 +117,16 @@ def charger_corpus(conn, chemin_json: str = etiqueter.CHEMIN_JSON) -> dict:
     - ``cles_incoherentes`` : lignes dont `dedup._cle` recalculée ne retombe pas
       sur la clé stockée. Ce cas ne devrait pas exister ; s'il existe, il
       invalide l'alignement étiquette ↔ offre et doit être vu, pas absorbé.
+
+    LÈVE ``etiqueter.ProvenanceEtrangere`` si une étiquette ne vient pas de
+    l'étiquetage à l'aveugle. C'est la frontière du corpus de mesure : le
+    feedback in-app est posé EN VOYANT le classement, s'en servir pour noter
+    ce même classement ne mesurerait plus que l'accord du système avec
+    lui-même. On refuse donc plutôt que de filtrer — une mesure amputée d'un
+    nombre inconnu d'étiquettes rendrait un chiffre qui a l'air normal.
     """
     etiquettes = etiqueter.charger_json(chemin_json)
+    etiqueter.verifier_provenance(etiquettes)
     lignes = {
         l["cle"]: l
         for l in conn.execute(

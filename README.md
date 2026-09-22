@@ -503,6 +503,8 @@ job-finder/
 ├── etiqueter.py            # corpus étiqueté de référence (CLI à l'aveugle)
 ├── evaluer_ranking.py      # mesure le ranking sur le corpus étiqueté
 ├── etiquettes.json         # LE corpus — source de vérité, versionnée
+├── reference.py            # instantané figé de la base + estampille de config
+├── feedback.py             # journal append-only des retours sur les offres
 ├── benchmark.py            # comparaison de modèles d'embedding
 ├── verifier.py             # vérification LLM locale (Ollama), verdict explicable
 ├── market.py               # indicateurs « le marché est-il favorable ? »
@@ -525,6 +527,13 @@ job-finder/
 > Côté CV, `jobs.py` ne connaît QUE la file — ni `cv_forge`, ni Flask, ni le
 > worker — et `worker.py` est le seul module à importer `cv_forge`, dont il ne
 > touche qu'une fonction : `generate_cv`.
+>
+> Côté jugements, **deux pools qui ne se mélangent jamais** : `etiqueter.py`
+> étiquette À L'AVEUGLE et sert à MESURER le ranking ; `feedback.py` recueille
+> des retours EN VOYANT le classement et servira à l'AMÉLIORER. Chaque
+> étiquette porte une `provenance`, et `evaluer_ranking.charger_corpus` REFUSE
+> de mesurer un corpus qui en contiendrait une d'origine in-app —
+> `tests/test_etancheite.py` échoue si la barrière saute.
 
 ---
 
