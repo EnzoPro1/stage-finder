@@ -142,3 +142,72 @@ def test_n_utilise_jamais_la_base_en_ecriture(monkeypatch):
     with pytest.raises(Arret):
         comparer_llm.main()
     assert ouvertures == ["instantane.db"]
+
+
+# ---------------------------------------------------------------------------
+# Re-pondération sans LLM, et modèle d'embedding de la mesure
+# ---------------------------------------------------------------------------
+def test_le_rapport_garde_le_score_cosinus(corpus):
+    r = comparer_llm.comparer(
+        corpus, ["modele-x"], k=2, top_n=4,
+        **_options({"A": 0.1, "B": 0.9, "C": 0.2, "D": 0.8}, []))
+    assert [o["score_cosinus"] for o in r["offres"].values()] == [0.9, 0.8, 0.7, 0.6]
+
+
+def test_reponderer_sans_rappeler_le_llm(corpus, monkeypatch):
+    r = comparer_llm.comparer(
+        corpus, ["modele-x"], k=2, top_n=4,
+        **_options({"A": 0.0, "B": 0.0, "C": 0.0, "D": 1.0}, []))
+
+    def interdit(*a, **k):
+        raise AssertionError("le LLM ne doit pas être rappelé")
+    monkeypatch.setattr(comparer_llm.verifier, "verifier", interdit)
+    res = comparer_llm.reponderer(r, "modele-x", [0.0, 0.5, 1.0])
+    # Poids 0 : cosinus pur (A, B en tête -> 1 pertinente sur 2).
+    assert res[0.0]["final"]["precision@k"] == 0.5
+    # Poids 1 : LLM pur — D d'abord, puis le départage cosinus (A).
+    assert res[1.0]["final"]["precision@k"] == 0.5
+    # Poids 0,5 : D = 0,8 ; A = 0,45 ; B = 0,40 -> D, A.
+    assert res[0.5]["final"]["precision@k"] == 0.5
+
+
+def test_reponderer_retrouve_le_final_mesure(corpus):
+    """Au poids du run, la re-pondération rend EXACTEMENT les chiffres mesurés."""
+    r = comparer_llm.comparer(
+        corpus, ["modele-x"], k=2, top_n=2,
+        **_options({"A": 0.1, "B": 0.9, "C": 0.2, "D": 0.8}, []))
+    res = comparer_llm.reponderer(r, "modele-x", [r["poids_llm"]])[r["poids_llm"]]
+    assert res["final"] == r["modeles"]["modele-x"]["final"]
+    assert res["final_top_n"] == r["modeles"]["modele-x"]["final_top_n"]
+
+
+def test_le_modele_d_embedding_est_libere_avant_le_llm(corpus, monkeypatch):
+    ordre = []
+    monkeypatch.setattr(comparer_llm.ranker, "liberer_modele",
+                        lambda nom=None: ordre.append("liberer"))
+    opts = _options({"A": 0.1, "B": 0.9, "C": 0.2, "D": 0.8}, [])
+    juger = opts["juger"]
+    opts["juger"] = lambda o, reglages=None: ordre.append("juger") or juger(o, reglages)
+    comparer_llm.comparer(corpus, ["modele-x"], k=2, top_n=4, **opts)
+    assert ordre[0] == "liberer" and ordre.count("liberer") == 1
+
+
+def test_option_modele_embedding(monkeypatch):
+    import config
+    import reference
+
+    vu = {}
+
+    class Arret(Exception):
+        pass
+
+    def ouvrir(chemin):
+        vu["modele"] = config.MODELE_EMBEDDING
+        raise Arret
+    monkeypatch.setattr(reference, "ouvrir_pour_mesure", ouvrir)
+    monkeypatch.setattr(comparer_llm.llm, "modeles_manquants", lambda m: [])
+    monkeypatch.setattr("sys.argv", ["comparer_llm.py", "--db", "x.db",
+                                     "--modele-embedding", "ollama:bge-m3"])
+    with pytest.raises(Arret):
+        comparer_llm.main()
+    assert vu["modele"] == "ollama:bge-m3"

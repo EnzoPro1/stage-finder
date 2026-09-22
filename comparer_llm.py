@@ -34,9 +34,18 @@ Le classement cosinus est celui du modèle d'embedding COURANT
 offres, dont 20 positives, ne séparent que des écarts nets — une différence
 d'une offre dans le top 10 vaut 0,1 de précision.
 
+## Re-pondérer sans relancer le LLM
+
+Le rapport JSON garde, par offre, le score cosinus et le score LLM. ``--depuis``
+recalcule le « final » pour d'autres poids du LLM (``verifier.score_final`` :
+``(1 - poids) · cosinus + poids · LLM``) à partir de ces seuls chiffres, en une
+seconde, sans rappeler aucun modèle.
+
 Utilisation :
     python comparer_llm.py                           # qwen3:4b puis gemma3:4b
     python comparer_llm.py --modeles qwen3:4b --json comparaison.json
+    python comparer_llm.py --modeles qwen3:4b --modele-embedding ollama:bge-m3
+    python comparer_llm.py --depuis comparaison.json --poids 0.5 0.3 0.2
 """
 
 from __future__ import annotations
@@ -53,6 +62,7 @@ import evaluation
 import evaluer_ranking
 import llm
 import ollama_pool
+import ranker
 import reference
 import verifier
 from dedup import _cle as cle_identite
@@ -75,12 +85,13 @@ def _mesurer(ordre: list[str], pertinences: dict[str, float], k: int) -> dict:
 
 
 def classements(cosinus: list[dict], verdicts: dict[str, verifier.Verdict | None],
-                top_n: int) -> dict[str, list[str]]:
+                top_n: int, poids: float | None = None) -> dict[str, list[str]]:
     """Les trois ordres (clés) dérivés du cosinus et des verdicts.
 
     ``cosinus`` : le classement de ``evaluer_ranking.evaluer_corpus``, trié.
     Un verdict manquant (échec du modèle) compte 0 en « llm seul » — l'offre
     n'est pas gagnée par défaut — et laisse le cosinus en « final ».
+    ``poids`` : poids du LLM dans le final (défaut : ``config.VERIFY_SCORE_WEIGHT``).
     """
     rang_cos = {item["cle"]: i for i, item in enumerate(cosinus)}
     score_cos = {item["cle"]: item["score"] for item in cosinus}
@@ -91,7 +102,7 @@ def classements(cosinus: list[dict], verdicts: dict[str, verifier.Verdict | None
 
     def final(cle, avec_verdict=True):
         v = verdicts.get(cle) if avec_verdict else None
-        return verifier.score_final(score_cos[cle], v)
+        return verifier.score_final(score_cos[cle], v, poids)
 
     cles = list(rang_cos)
     shortlist = set(cles[:top_n])
@@ -151,19 +162,24 @@ def comparer(corpus: dict, modeles: list[str], k: int = 10, top_n: int | None = 
     """Classement cosinus du corpus, puis chaque modèle l'un après l'autre."""
     top_n = top_n or llm.charger_reglages().top_n
     cosinus = evaluer_ranking.evaluer_corpus(corpus, k)["classement"]
+    # Enchaînement VRAM, comme en run réel : le modèle d'embeddings (s'il est
+    # servi par Ollama) quitte le GPU avant que le LLM n'y soit chargé.
+    ranker.liberer_modele()
     offres = {cle_identite(o): o for o in corpus["offres"]}
     ordre = [item["cle"] for item in cosinus]
     pertinences = corpus["pertinences"]
 
     rapport = {
         "k": k, "top_n": top_n, "n": len(ordre),
+        "poids_llm": config.VERIFY_SCORE_WEIGHT,
         "n_positives": sum(1 for c in ordre if pertinences[c] > 0),
         "modele_embedding": config.MODELE_EMBEDDING,
         "cosinus": _mesurer(ordre, pertinences, k),
         "modeles": {},
         "offres": {c: {"title": offres[c].title, "company": offres[c].company,
-                       "pertinent": int(pertinences[c]), "rang_cosinus": i}
-                   for i, c in enumerate(ordre, 1)},
+                       "pertinent": int(pertinences[c]), "rang_cosinus": i,
+                       "score_cosinus": item["score"]}
+                   for i, (c, item) in enumerate(zip(ordre, cosinus), 1)},
     }
     for modele in modeles:
         jugement = juger_corpus(offres, ordre, modele, **options)
@@ -183,6 +199,29 @@ def comparer(corpus: dict, modeles: list[str], k: int = 10, top_n: int | None = 
                 "justification": v.justification,
             }
     return rapport
+
+
+def reponderer(rapport: dict, modele: str, poids: list[float]) -> dict[float, dict]:
+    """Métriques du final pour chaque poids du LLM, depuis un rapport existant.
+
+    N'utilise que ``score_cosinus``, le score LLM et l'étiquette de chaque
+    offre : aucun modèle n'est rappelé. Rend ``poids -> {final, final_top_n}``.
+    """
+    k, top_n = rapport["k"], rapport["top_n"]
+    offres = sorted(rapport["offres"].items(), key=lambda kv: kv[1]["rang_cosinus"])
+    cosinus = [{"cle": c, "score": o["score_cosinus"]} for c, o in offres]
+    pertinences = {c: float(o["pertinent"]) for c, o in offres}
+    verdicts = {
+        c: None if o.get(modele) is None
+        else verifier.Verdict(True, o[modele]["score"], False, "stage", "")
+        for c, o in offres
+    }
+    resultats = {}
+    for p in poids:
+        ordres = classements(cosinus, verdicts, top_n, poids=p)
+        resultats[p] = {"final": _mesurer(ordres["final"], pertinences, k),
+                        "final_top_n": _mesurer(ordres["final_top_n"], pertinences, k)}
+    return resultats
 
 
 def afficher(r: dict) -> None:
@@ -216,7 +255,36 @@ def main() -> None:
     parser.add_argument("--top-n", type=int, default=None)
     parser.add_argument("--modeles", nargs="+", default=MODELES_DEFAUT)
     parser.add_argument("--json", default=None, help="Écrit le rapport complet (verdicts compris).")
+    parser.add_argument("--modele-embedding", default=None,
+                        help=f"Modèle du classement cosinus (défaut : {config.MODELE_EMBEDDING}). "
+                             f"Aucun repli ici : une mesure qui échoue doit échouer.")
+    parser.add_argument("--depuis", default=None,
+                        help="Rapport JSON existant : re-pondère sans rappeler le LLM.")
+    parser.add_argument("--poids", nargs="+", type=float, default=[0.5, 0.3, 0.2],
+                        help="Poids du LLM dans le final, avec --depuis.")
     args = parser.parse_args()
+
+    if args.depuis:
+        with open(args.depuis, encoding="utf-8") as f:
+            rapport = json.load(f)
+        c = rapport["cosinus"]
+        print(f"\n=== Re-pondération (sans LLM) — embeddings {rapport['modele_embedding']}, "
+              f"k={rapport['k']}, top {rapport['top_n']} ===\n")
+        print(f"{'classement':<34} {'P@k':>6} {'nDCG@k':>8} {'rang méd.':>10}")
+        print("-" * 62)
+        print(f"{'cosinus seul':<34} {c['precision@k']:>6} {c['ndcg@k']:>8} "
+              f"{str(c['rang_median_positives']):>10}")
+        for modele in rapport["modeles"]:
+            for p, m in reponderer(rapport, modele, args.poids).items():
+                for cle, libelle in (("final", "final"), ("final_top_n", f"top {rapport['top_n']}")):
+                    x = m[cle]
+                    nom = f"{modele} · {libelle} · {1 - p:.1f}/{p:.1f}"
+                    print(f"{nom:<34} {x['precision@k']:>6} {x['ndcg@k']:>8} "
+                          f"{str(x['rang_median_positives']):>10}")
+        return
+
+    if args.modele_embedding:
+        config.MODELE_EMBEDDING = args.modele_embedding
 
     manquants = llm.modeles_manquants(args.modeles)
     if manquants:
