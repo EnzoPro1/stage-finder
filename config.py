@@ -689,6 +689,22 @@ CV_MASTER_PATH = Path(r"C:\Users\toi\cv_forge\data\master.yaml")
 # Racine des CV produits : un sous-dossier par offre, nommé d'après sa clé.
 CV_OUT_ROOT = Path(r"C:\Users\toi\cv_forge\output\stages")
 
+# Modèle de l'EXTRACTION d'offre par cv_forge — réglages DISTINCTS de ceux de
+# la vérification (section 9), parce que la tâche l'est : la vérification
+# répond vite sans raisonner (think=False) ; l'extraction tourne en tâche de
+# fond et garde le thinking, mesuré par cv_forge comme nettement moins
+# halluciné (titres reconstruits, durées et tags inventés).
+#
+# qwen3:4b plutôt que le défaut de cv_forge (qwen3:8b) : tient en VRAM sur
+# une carte de 6 Go. Même num_ctx que la vérification : Ollama réutilise alors
+# le modèle déjà chargé au lieu de le recharger avec une autre fenêtre.
+# Surchargeables : SF_CV_LLM_MODEL, SF_CV_LLM_THINK, SF_CV_LLM_NUM_CTX,
+# SF_CV_LLM_KEEP_ALIVE (reglages_cv.py).
+CV_LLM_MODELE = "qwen3:4b"
+CV_LLM_THINK = True
+CV_LLM_NUM_CTX = 8192
+CV_LLM_KEEP_ALIVE = "10m"
+
 # ---------------------------------------------------------------------------
 # 9) Vérification par LLM local (Ollama) — couche « retrieve-then-verify »
 # ---------------------------------------------------------------------------

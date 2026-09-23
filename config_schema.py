@@ -135,6 +135,10 @@ class ConfigModel(BaseModel):
     LLM_NUM_CTX: int = Field(ge=512, le=131072)
     LLM_KEEP_ALIVE: str | int
     LLM_NOUVELLES_TENTATIVES: int = Field(ge=0, le=5)
+    CV_LLM_MODELE: str = Field(min_length=1)
+    CV_LLM_THINK: bool
+    CV_LLM_NUM_CTX: int = Field(ge=512, le=131072)
+    CV_LLM_KEEP_ALIVE: str | int
 
     # --- Persistance / réseau ---
     CHEMIN_BASE: str = Field(min_length=1)

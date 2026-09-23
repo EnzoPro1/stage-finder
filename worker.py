@@ -227,9 +227,7 @@ class Worker:
         qui n'a rien à voir avec les CV.
         """
         if self._forge_config is None:
-            from cv_forge import ForgeConfig
-
-            self._forge_config = ForgeConfig()
+            self._forge_config = reglages_cv.forge_config()
         return self._forge_config
 
     def _appel_generate_cv(self, offre: dict, texte: str):

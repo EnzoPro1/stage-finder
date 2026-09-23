@@ -718,12 +718,10 @@ def api_cv_demander(offer_id: str):
     """
     conn = _conn()
 
-    from cv_forge import ForgeConfig
-
     try:
         job, reutilise = jobs.demander(
             conn, offer_id,
-            master_path=reglages_cv.master_path(), config=ForgeConfig(),
+            master_path=reglages_cv.master_path(), config=reglages_cv.forge_config(),
         )
     except jobs.DemandeRefusee as refus:
         return _erreur(refus.code, refus.message, _HTTP_PAR_REFUS[refus.code])

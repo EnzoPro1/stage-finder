@@ -158,12 +158,10 @@ def cmd_enfiler(args) -> int:
         print(f"Erreur : {erreur}", file=sys.stderr)
         return 1
 
-    from cv_forge import ForgeConfig
-
     try:
         job, reutilise = jobs.demander(
             conn, offre["cle"],
-            master_path=reglages_cv.master_path(), config=ForgeConfig(),
+            master_path=reglages_cv.master_path(), config=reglages_cv.forge_config(),
         )
     except jobs.DemandeRefusee as refus:
         print(f"Erreur [{refus.code}] : {refus.message}", file=sys.stderr)
@@ -293,10 +291,8 @@ def cmd_batch(args) -> int:
     conn = storage.ouvrir(args.db)
     jobs.ensure_schema(conn)
 
-    from cv_forge import ForgeConfig
-
     master = reglages_cv.master_path()
-    forge = ForgeConfig()
+    forge = reglages_cv.forge_config()
 
     # Les meilleures d'abord : `dernier_score` est le score du dernier run.
     # NULLS LAST explicite — en SQLite, NULL trie AVANT tout le reste en
