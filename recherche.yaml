@@ -74,8 +74,9 @@ familles:
 # Chaque origine porte les formes que les sources comprennent — sondé le
 # 2026-09-17 :
 #   insee        France Travail (`commune`, jusqu'à 5 codes par appel)
-#   code_postal  Adzuna — `where=Meaux` rend 0, `where=77100` rend des
-#                offres ; son rayon par défaut est de 10 km
+#   code_postal  Adzuna — `where=<nom de commune>` rend 0 pour une petite
+#                commune, `where=<code postal>` rend des offres ; son rayon
+#                par défaut est de 10 km
 #   commune      Careerjet et Indeed, en toutes lettres
 student_jobs:
 
@@ -83,11 +84,12 @@ student_jobs:
   #
   # Calibré le 2026-09-17 sur les temps de trajet réels (1 506 communes à
   # moins de 60 km, routées par ORS) : part de la POPULATION joignable en
-  # moins de 45 min ajustées qui tombe dans le rayon —
+  # moins de 45 min ajustées qui tombe dans le rayon — mesuré sur les
+  # origines réelles de l'auteur (Seine-et-Marne et Noisy-le-Grand) :
   #
   #                          15 km   20 km   25 km   30 km   km route au bord
-  #   Meaux            45 %    80 %    99 %   100 %    35,6
-  #   Évry-Courcouronnes   26 %    49 %    81 %    95 %    27,9
+  #   origine A               45 %    80 %    99 %   100 %    35,6
+  #   origine B               26 %    49 %    81 %    95 %    27,9
   #   ESIEE (Noisy-le-Grand)  38 %    82 %    94 %    98 %    37,2
   #
   # 30 km pour les trois : un rayon COMMUN laisse France Travail interroger
@@ -95,6 +97,9 @@ student_jobs:
   # du seuil est retiré par le filtre de trajet, pas par le rayon.
   rayon_km: 30
 
+  # Origines d'EXEMPLE. Les vôtres (domicile…) vont dans
+  # `recherche.local.yaml`, jamais versionné : le même bloc
+  # `student_jobs: {origines: …}` y remplace celui-ci (recherche._fusionner).
   origines:
     ville_a:
       libelle: "Meaux"
@@ -131,7 +136,7 @@ student_jobs:
   # Termes, un par étiquette. Pas de filtre « temps partiel » côté source, sauf
   # la requête sans mot-clé de France Travail (ci-dessous) : les annonces de
   # job étudiant ne renseignent presque jamais la durée. Careerjet autour de
-  # Meaux : 12 offres avec `contractperiod=p`, 108 avec une requête OU
+  # l'origine A : 12 offres avec `contractperiod=p`, 108 avec une requête OU
   # de ces 16 termes et sans filtre.
   termes: ["étudiant", "job étudiant", "temps partiel", "mi-temps", "week-end",
            "extra", "saisonnier", "soirée", "vendeur", "équipier", "hôte de caisse",

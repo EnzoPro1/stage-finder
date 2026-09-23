@@ -200,15 +200,15 @@ def texte_brut(item: dict) -> str:
 def recuperer_jobs_etudiants() -> list[dict]:
     """Jobs étudiants : UNE requête OU des termes par origine, SANS filtre de durée.
 
-    Le filtre `contractperiod=p` sous-déclare massivement : autour de
-    Meaux, 12 offres, contre 108 pour la requête OU des 16 termes
+    Le filtre `contractperiod=p` sous-déclare massivement : autour d'une
+    origine de Seine-et-Marne, 12 offres, contre 108 pour la requête OU des 16 termes
     (sondé le 2026-09-17). Les annonces de job étudiant ne renseignent presque
     jamais ce champ.
 
     Careerjet ne dit pas quel terme a répondu : chaque offre est étiquetée par
     les termes retrouvés dans son titre et son extrait
     (`provenance.marquer_par_texte`). L'API n'a pas de paramètre de rayon :
-    « Meaux » ramène les communes voisines selon sa propre résolution.
+    un nom de commune ramène les communes voisines selon sa propre résolution.
     """
     jobs = recherche.charger().student_jobs
     etiquettes = list(jobs.familles())

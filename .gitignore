@@ -65,3 +65,10 @@ embeddings_cache.db
 
 # Cache modèles HuggingFace (si local au projet)
 .cache/
+
+# Surcharges locales de recherche.yaml (recherche.py) : les vraies origines
+# des jobs étudiants — des lieux de vie. Jamais versionnées.
+recherche.local.yaml
+
+# Réglages de l'outillage local (aperçu, agents) : propres à ce poste.
+.claude/

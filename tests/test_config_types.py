@@ -73,7 +73,11 @@ def test_les_chemins_effectifs_sont_valides():
 def test_le_master_existe_sur_le_disque():
     """Sans lui, chaque génération échouerait en MASTER_INVALID — proprement,
     mais toutes. Autant le savoir ici. On vérifie le chemin EFFECTIF : celui
-    du .env s'il y en a un, sinon le défaut de config.py."""
+    du .env s'il y en a un, sinon le défaut de config.py.
+
+    Sauté sans cv_forge installé (clone public, CI) : la génération de CV
+    y est indisponible de toute façon, et il n'y a pas de master à trouver."""
+    pytest.importorskip("cv_forge", reason="cv_forge non installé : pas de génération de CV")
     chemin = reglages_cv.master_path()
     assert chemin.is_file(), reglages_cv.message_master_absent(chemin)
 

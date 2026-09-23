@@ -100,7 +100,7 @@ SOURCES_ACTIVES = [
 #
 # FRANCE TRAVAIL : 319 offres brutes, 0 stage gardé (contrôle en réel du
 # 2026-09-17, requêtes par terme sur les familles de recherche.yaml). Conforme
-# au diagnostic du 2026-09-05 (SPEC_sources_muettes.md) : le gisement ne porte
+# au diagnostic du 2026-09-05 (docs/SPEC_sources_muettes.md) : le gisement ne porte
 # presque pas de stages — aucune nature de contrat « stage », et les rares
 # stages y sont déclarés en CDD. L'adaptateur reste au catalogue : il est
 # central pour les jobs étudiants.
@@ -332,7 +332,7 @@ MOTS_CLES_ALTERNANCE = [
 FRANCE_TRAVAIL_PAGES_JOBS = 5
 
 # Careerjet : une requête OU par origine. Pas de rayon côté API : pages
-# annoncées à 50 par page (2026-09-17) — Meaux 3, Évry 2, ESIEE 6.
+# annoncées à 50 par page (2026-09-17) — origine A 3, origine B 2, ESIEE 6.
 CAREERJET_PAGES_JOBS = 6
 CAREERJET_TAILLE_PAGE_JOBS = 50
 
@@ -682,12 +682,13 @@ CHEMIN_RAPPORT = Path("flux.html")
 # strictement à sens unique — cv_forge n'importe rien d'ici.
 #
 # Le master est le RÉSERVOIR de CV : il est lu, jamais écrit, ni par
-# stage_finder ni par le LLM. Chemin ABSOLU et propre à ce poste : cv_forge
-# est un dépôt voisin, pas un sous-dossier.
-CV_MASTER_PATH = Path(r"C:\Users\toi\cv_forge\data\master.yaml")
+# stage_finder ni par le LLM. Chemin ABSOLU : cv_forge est un dépôt à part,
+# pas un sous-dossier. Défaut : ~/cv-forge ; ailleurs, SF_CV_MASTER_PATH et
+# SF_CV_OUT_ROOT dans le .env (reglages_cv.py).
+CV_MASTER_PATH = Path.home() / "cv-forge" / "data" / "master.yaml"
 
 # Racine des CV produits : un sous-dossier par offre, nommé d'après sa clé.
-CV_OUT_ROOT = Path(r"C:\Users\toi\cv_forge\output\stages")
+CV_OUT_ROOT = Path.home() / "cv-forge" / "output" / "stages"
 
 # Modèle de l'EXTRACTION d'offre par cv_forge — réglages DISTINCTS de ceux de
 # la vérification (section 9), parce que la tâche l'est : la vérification

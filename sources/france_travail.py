@@ -8,7 +8,7 @@ Auth : OAuth2 « client_credentials ».
   - Token  : POST https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire
   - Search : GET  https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search
 
-Sécurité (cf. AMELIORATIONS §4.2) : la clé (client_secret) ne transite JAMAIS en
+Sécurité : la clé (client_secret) ne transite JAMAIS en
 query string. Elle sert à obtenir un jeton (corps de requête x-www-form-urlencoded),
 et toutes les requêtes de recherche s'authentifient par un en-tête
 `Authorization: Bearer <token>`.
@@ -396,7 +396,7 @@ def recuperer_jobs_etudiants() -> list[dict]:
       `distance`) : `motsCles` est conjonctif, pas de OU possible ;
     - un appel SANS mot-clé par ORIGINE, filtré sur le temps partiel structuré
       (`tempsPlein=false`, même compte que `dureeHebdo=2` : 617 offres à
-      30 km de Meaux sur 7 jours, sondé le 2026-09-17). France Travail
+      30 km d'une origine de Seine-et-Marne sur 7 jours, sondé le 2026-09-17). France Travail
       est la seule source dont ce champ est fiable — Careerjet en rendait 12.
 
     Pas de filtre de région : le rayon autour des origines borne la zone, et

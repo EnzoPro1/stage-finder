@@ -130,3 +130,49 @@ familles:
     en: ["x"]
 """))
     assert recherche.charger().noms_familles() == ["seule"]
+
+
+# ---------------------------------------------------------------------------
+# Surcharges locales (recherche.local.yaml)
+# ---------------------------------------------------------------------------
+_AVEC_JOBS = """
+familles:
+  seule:
+    en: ["x"]
+student_jobs:
+  rayon_km: 30
+  origines:
+    ville_a: {libelle: "Versailles", commune: "Versailles", insee: "78646", code_postal: "78000"}
+  termes: ["vendeur"]
+  trajet: {seuil_minutes: 45, facteur_trafic: 1.3, facteur_detour: 1.3, vitesse_estimation_kmh: 50}
+"""
+
+
+def test_la_surcharge_locale_remplace_les_origines_et_garde_le_reste(tmp_path, monkeypatch):
+    monkeypatch.setattr(recherche, "CHEMIN_RECHERCHE", _ecrire(tmp_path, _AVEC_JOBS))
+    locale = tmp_path / "recherche.local.yaml"
+    locale.write_text("""
+student_jobs:
+  origines:
+    maison: {libelle: "Meaux", commune: "Meaux", insee: "77284", code_postal: "77100"}
+""", encoding="utf-8")
+    monkeypatch.setattr(recherche, "CHEMIN_RECHERCHE_LOCALE", str(locale))
+
+    r = recherche.charger()
+    assert list(r.student_jobs.origines) == ["maison"]
+    assert r.student_jobs.termes == ["vendeur"] and r.student_jobs.rayon_km == 30
+    assert r.noms_familles() == ["seule"]
+
+
+def test_sans_surcharge_locale_le_depot_fait_foi(tmp_path, monkeypatch):
+    monkeypatch.setattr(recherche, "CHEMIN_RECHERCHE", _ecrire(tmp_path, _AVEC_JOBS))
+    assert list(recherche.charger().student_jobs.origines) == ["ville_a"]
+
+
+def test_une_surcharge_locale_invalide_est_rejetee(tmp_path, monkeypatch):
+    monkeypatch.setattr(recherche, "CHEMIN_RECHERCHE", _ecrire(tmp_path, _AVEC_JOBS))
+    locale = tmp_path / "recherche.local.yaml"
+    locale.write_text("student_jobs:\n  rayon_km: -3\n", encoding="utf-8")
+    monkeypatch.setattr(recherche, "CHEMIN_RECHERCHE_LOCALE", str(locale))
+    with pytest.raises(ValidationError):
+        valider_config()

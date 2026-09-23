@@ -243,7 +243,7 @@ def valider_config() -> ConfigModel:
         if hasattr(config, nom)
     }
     modele = ConfigModel(**champs)
-    recherche.lire(recherche.CHEMIN_RECHERCHE)
+    recherche.lire(recherche.CHEMIN_RECHERCHE, recherche.CHEMIN_RECHERCHE_LOCALE)
     return modele
 
 

@@ -65,3 +65,13 @@ def _environnement_neutre(request, monkeypatch):
     import config
 
     monkeypatch.setattr(config, "MODELE_EMBEDDING", config.MODELE_EMBEDDING_REPLI)
+
+
+@pytest.fixture(autouse=True)
+def _sans_surcharge_locale(tmp_path, monkeypatch):
+    """``recherche.local.yaml`` porte les vraies origines du poste : aucun
+    test ne doit en dépendre. Chacun voit un chemin de surcharge absent."""
+    import recherche
+
+    monkeypatch.setattr(recherche, "CHEMIN_RECHERCHE_LOCALE",
+                        str(tmp_path / "recherche.local.yaml"))

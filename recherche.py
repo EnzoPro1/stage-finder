@@ -51,6 +51,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 CHEMIN_RECHERCHE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "recherche.yaml")
 
+# Surcharges PROPRES À CE POSTE, jamais versionnées (.gitignore). Les
+# origines des jobs étudiants sont des lieux de vie : le dépôt porte des
+# origines d'exemple, le vrai domicile vit ici. Facultatif.
+CHEMIN_RECHERCHE_LOCALE = os.path.join(os.path.dirname(CHEMIN_RECHERCHE),
+                                       "recherche.local.yaml")
+
 # Nom de famille : identifiant stable, réutilisé comme étiquette, dans la base
 # et dans le rapport. Pas d'espace, pas de majuscule.
 _MOTIF_NOM_FAMILLE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -368,8 +374,7 @@ def familles_dans_texte(texte: str, candidates: list[str],
     ]
 
 
-def lire(chemin: str) -> Recherche:
-    """Lit et valide un fichier de recherche. Lève si absent, illisible ou invalide."""
+def _lire_yaml(chemin: str) -> dict:
     try:
         with open(chemin, encoding="utf-8") as f:
             brut = yaml.safe_load(f)
@@ -379,28 +384,56 @@ def lire(chemin: str) -> Recherche:
         raise ValueError(f"YAML illisible dans {chemin} : {err}") from err
     if not isinstance(brut, dict):
         raise ValueError(f"{chemin} doit contenir un dictionnaire à la racine.")
+    return brut
+
+
+def _fusionner(base: dict, locale: dict) -> dict:
+    """Surcharge sur UN niveau : un bloc de la surcharge remplace, clé par clé,
+    le bloc du même nom. ``student_jobs: {origines: …}`` remplace donc les
+    origines entières et garde les termes, le rayon et le trajet du dépôt."""
+    fusion = dict(base)
+    for cle, valeur in locale.items():
+        if isinstance(valeur, dict) and isinstance(base.get(cle), dict):
+            fusion[cle] = {**base[cle], **valeur}
+        else:
+            fusion[cle] = valeur
+    return fusion
+
+
+def lire(chemin: str, locale: str | None = None) -> Recherche:
+    """Lit et valide un fichier de recherche. Lève si absent, illisible ou invalide.
+
+    ``locale`` : fichier de surcharges facultatif (cf. ``_fusionner``). Absent,
+    il est ignoré ; présent, il est validé avec le reste.
+    """
+    brut = _lire_yaml(chemin)
+    if locale is not None and os.path.exists(locale):
+        brut = _fusionner(brut, _lire_yaml(locale))
     return Recherche.model_validate(brut)
 
 
 @functools.lru_cache(maxsize=None)
-def _charger_en_cache(chemin: str) -> Recherche:
-    return lire(chemin)
+def _charger_en_cache(chemin: str, locale: str) -> Recherche:
+    return lire(chemin, locale)
 
 
 def charger() -> Recherche:
-    """La recherche du dépôt, lue une fois par processus.
+    """La recherche effective (dépôt + surcharges locales), lue une fois par processus.
 
-    Le chemin est relu dans ``CHEMIN_RECHERCHE`` à chaque appel, pour qu'un
-    test puisse le rediriger ; le cache est indexé par chemin.
+    Les chemins sont relus dans ``CHEMIN_RECHERCHE`` et
+    ``CHEMIN_RECHERCHE_LOCALE`` à chaque appel, pour qu'un test puisse les
+    rediriger ; le cache est indexé par chemins.
     """
-    return _charger_en_cache(CHEMIN_RECHERCHE)
+    return _charger_en_cache(CHEMIN_RECHERCHE, CHEMIN_RECHERCHE_LOCALE)
 
 
 if __name__ == "__main__":
     import console  # noqa: F401 - force UTF-8 sur la console Windows
 
-    r = lire(CHEMIN_RECHERCHE)
+    r = lire(CHEMIN_RECHERCHE, CHEMIN_RECHERCHE_LOCALE)
     termes = r.termes()
+    if os.path.exists(CHEMIN_RECHERCHE_LOCALE):
+        print(f"(surcharges lues dans {CHEMIN_RECHERCHE_LOCALE})")
     print(f"✅ {CHEMIN_RECHERCHE} est valide : {len(r.familles)} famille(s), "
           f"{len(termes)} terme(s) distinct(s).")
     for t in termes:
