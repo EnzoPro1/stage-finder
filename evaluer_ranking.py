@@ -58,7 +58,7 @@ octet la sortie de ce harnais.
 viennent de careerjet (24), jobspy:linkedin (19), jobspy:indeed (12) et
 free_work (2). **Aucune de France Travail ni d'Adzuna** — parce que ces deux
 sources ne rapportaient rien au mode stage au moment de l'étiquetage
-(cf. `SPEC_sources_muettes.md`). Les métriques ci-dessous décrivent donc le
+(cf. `docs/SPEC_sources_muettes.md`). Les métriques ci-dessous décrivent donc le
 classement sur un gisement amputé de ses deux plus grosses sources françaises.
 
 ### L'instrument de l'autre moitié

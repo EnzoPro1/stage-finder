@@ -1,0 +1,33 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    # Windows : c'est la plate-forme de développement du projet (console
+    # UTF-8, chemins, truststore), celle que la suite doit garder verte.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Modèle d'embeddings de repli (MiniLM, ~470 Mo), téléchargé une fois.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-minilm-v1
+
+      - name: Dépendances
+        run: pip install -r requirements.txt
+
+      - name: pytest
+        env:
+          PYTHONUTF8: "1"
+        run: python -m pytest -q

@@ -7,7 +7,7 @@ lit une offre pré-sélectionnée et juge si elle correspond VRAIMENT au stage
 recherché, avec un verdict explicable (score, alternance ?, niveau, drapeaux
 rouges, justification).
 
-Garanties (cf. SPEC_verification_llm.md) :
+Garanties (cf. docs/SPEC_verification_llm.md) :
 - 100 % local / gratuit : appels vers Ollama (http://localhost:11434), aucune API cloud.
 - Sortie structurée : on demande à Ollama du JSON contraint par schéma (``format``),
   ``temperature = 0`` pour la reproductibilité. Parsing DÉFENSIF quand même.
