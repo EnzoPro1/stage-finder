@@ -12,6 +12,12 @@ verdict. Le tout se pilote depuis une petite app web Flask.
 Tout tourne sur la machine : embeddings et LLM via [Ollama](https://ollama.com),
 aucune offre ni aucun profil n'est envoyé à un service d'IA externe.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/captures/app-sombre.png">
+  <img alt="L'app web : chiffres clés, profil recherché, et offres classées avec leur verdict IA"
+       src="docs/captures/app-clair.png">
+</picture>
+
 ---
 
 ## Points techniques
@@ -146,9 +152,10 @@ python app.py
 ```
 
 Le classement cosinus s'affiche immédiatement (depuis le cache disque). Un clic
-enchaîne la recherche sur toutes les sources puis la vérification IA du top N ;
-les colonnes `cos | IA | Δ` montrent ce que le LLM a changé au classement.
-L'analyse rédigée par le LLM se déplie sous chaque offre.
+enchaîne la recherche sur toutes les sources puis la vérification IA du top N.
+La colonne « IA » donne le rang après vérification et le mouvement par rapport
+au rang sémantique (▲ / ▼) ; l'analyse rédigée par le LLM se déplie sous
+chaque offre.
 
 ### Ligne de commande
 
@@ -180,6 +187,8 @@ python -m verifier                 # démo d'un verdict LLM (Ollama requis)
 ---
 
 ## Vérification LLM et faux positifs
+
+![Analyse du LLM dépliée sous une offre : score, justification en trois points](docs/captures/analyse-ia.png)
 
 Trois garde-fous dans [verifier.py](verifier.py), issus d'un cas réel : un
 « Legal intern » publié par un éditeur de cybersécurité était noté **0.90**.

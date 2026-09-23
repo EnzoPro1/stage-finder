@@ -25,7 +25,7 @@ REQUETE_REFERENCE = (
     "Stage d'ingénieur en intelligence artificielle et en cybersécurité, "
     "idéalement un poste mêlant les deux domaines (IA appliquée à la sécurité, "
     "sécurité des systèmes d'IA, MLOps sécurisé). Forte préférence pour l'IA. "
-    "Entreprise du CAC40 de préférence. Localisation Paris. "
+    "Localisation Paris. "
     "Stage de 6 mois à partir de janvier 2027."
 )
 
