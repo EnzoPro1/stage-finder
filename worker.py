@@ -61,6 +61,9 @@ INTERVALLE_SONDAGE_S = 1.0
 # visent la même base visent donc le même verrou, sans rien à configurer.
 SUFFIXE_VERROU = ".worker-lock"
 
+# Attente maximale pour prendre le verrou (cf. `VerrouWorker.acquerir`).
+ATTENTE_VERROU_MS = 250
+
 
 def chemin_verrou(db_path: str) -> str | None:
     """Fichier de verrou associé à une base. ``None`` si la base est en mémoire.
@@ -110,14 +113,24 @@ class VerrouWorker:
     def acquerir(self) -> bool:
         """Prend le verrou. Rend False si un autre processus le détient.
 
-        Ne bloque pas : ``busy_timeout=0``. Un batch qui découvre que
-        Flask porte déjà le worker n'a pas à attendre pour l'apprendre —
+        Ne bloque presque pas : ``ATTENTE_VERROU_MS``. Un batch qui découvre
+        que Flask porte déjà le worker n'a pas à attendre pour l'apprendre —
         il a autre chose à faire (attendre la file, pas le verrou).
+
+        Pas zéro pour autant. ``BEGIN EXCLUSIVE`` monte par paliers
+        (SHARED, RESERVED, EXCLUSIVE) : deux démarrages simultanés prennent
+        chacun SHARED, l'un obtient RESERVED, l'autre échoue — mais tant
+        que le perdant n'a pas relâché son SHARED, le gagnant ne peut pas
+        passer EXCLUSIVE. Sans attente, il échouait aussi, et PERSONNE ne
+        consommait la file (5 % des démarrages simultanés, mesuré). Avec
+        une attente, SQLite fait échouer le perdant sans attendre (il
+        détecte l'interblocage) et le gagnant patiente le temps qu'il
+        relâche.
         """
         if self.chemin is None or self._conn is not None:
             return True
         conn = sqlite3.connect(self.chemin, isolation_level=None, timeout=0)
-        conn.execute("PRAGMA busy_timeout=0")
+        conn.execute(f"PRAGMA busy_timeout={ATTENTE_VERROU_MS}")
         try:
             conn.execute("BEGIN EXCLUSIVE")
         except sqlite3.OperationalError as err:

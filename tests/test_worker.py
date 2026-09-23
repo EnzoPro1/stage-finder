@@ -71,6 +71,28 @@ def test_un_second_demarrage_est_refuse(base):
         w.arreter()
 
 
+def test_un_lecteur_de_passage_ne_fait_pas_echouer_le_verrou(tmp_path):
+    """Deux démarrages simultanés : le perdant tient un instant un verrou
+    SHARED sur le fichier avant d'abandonner. Sans attente, le gagnant ne
+    pouvait pas passer EXCLUSIVE et échouait AUSSI — personne ne consommait
+    la file. Ce lecteur de passage joue le perdant, de façon déterministe."""
+    import sqlite3
+
+    chemin = str(tmp_path / "v.lock")
+    sqlite3.connect(chemin).execute("CREATE TABLE t (x)").connection.close()
+    lecteur = sqlite3.connect(chemin, isolation_level=None, check_same_thread=False)
+    lecteur.execute("BEGIN")
+    lecteur.execute("SELECT * FROM t").fetchall()            # SHARED tenu
+    threading.Timer(0.05, lambda: lecteur.execute("ROLLBACK")).start()
+
+    verrou = worker_module.VerrouWorker(chemin)
+    try:
+        assert verrou.acquerir() is True
+    finally:
+        verrou.relacher()
+        lecteur.close()
+
+
 def test_le_worker_est_autorise_hors_reloader():
     assert worker_module.worker_autorise(reloader_actif=False, env={}) is True
 
