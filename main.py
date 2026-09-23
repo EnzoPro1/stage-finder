@@ -353,9 +353,12 @@ def verifier_shortlist(
     # et on garde le cosinus pour tout ce qui n'est pas en cache.
     modele_controle = modele_absent = False
 
-    # Clé de cache VERSIONNÉE : durcir le prompt doit invalider les anciens
-    # verdicts, sinon les offres déjà vues ressortent avec leur jugement périmé.
-    cle_modele = verifier.cle_cache(model)
+    # Clé de cache VERSIONNÉE et liée au profil : durcir le prompt ou changer
+    # le profil doit invalider les anciens verdicts, sinon les offres déjà
+    # vues ressortent avec un jugement périmé. Le MÊME profil sert à la clé et
+    # au prompt.
+    profil = config.REQUETE_REFERENCE
+    cle_modele = verifier.cle_cache(model, profil)
 
     for i, (offre, score) in enumerate(shortlist, 1):
         empreinte = storage.hash_offre(offre)
@@ -369,7 +372,7 @@ def verifier_shortlist(
                 modele_absent = _signaler_modele_absent(model, reglages, on_progress)
             verdict = None
             if not modele_absent:
-                verdict = verifier.verifier(offre, config.REQUETE_REFERENCE,
+                verdict = verifier.verifier(offre, profil,
                                             model=model, url=url, reglages=reglages)
                 nb_appels += 1
                 if verdict is None:

@@ -20,14 +20,16 @@ Testable isolément :  python -m verifier   (nécessite un Ollama qui tourne)
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import requests
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, BeforeValidator, ConfigDict
 
 import config
 import llm
@@ -37,7 +39,7 @@ if TYPE_CHECKING:  # évite l'import circulaire (normalize n'importe pas verifie
 
 logger = logging.getLogger(__name__)
 
-# Version des RÈGLES de jugement (prompt, extraction de description, garde-fous).
+# Version des RÈGLES de jugement (prompt, schéma, extraction, garde-fous).
 #
 # Le cache SQLite des verdicts est indexé par (offre, modèle). Sans ce numéro,
 # durcir le prompt ne changeait RIEN aux offres déjà vérifiées : elles
@@ -45,14 +47,50 @@ logger = logging.getLogger(__name__)
 # donc la version à la clé de cache — l'incrémenter invalide proprement les
 # verdicts obsolètes, sans toucher à la base.
 #
-# À INCRÉMENTER à chaque modification de _PROMPT, _extrait_pertinent ou des
-# fonctions _plafonner_*.
-VERSION_REGLES = 2
+# À INCRÉMENTER à chaque modification de _PROMPT, du schéma VerdictLLM,
+# de _extrait_pertinent ou des fonctions _plafonner_*.
+#
+# v3 : `niveau` contraint à NIVEAUX dans le schéma envoyé à Ollama.
+VERSION_REGLES = 3
 
 
-def cle_cache(model: str) -> str:
-    """Clé de cache d'un modèle, versionnée par les règles de jugement."""
-    return f"{model}@v{VERSION_REGLES}"
+def cle_cache(model: str, profil: str | None = None) -> str:
+    """Clé de cache : modèle, version des règles ET profil jugé.
+
+    Le profil est injecté dans le prompt : un verdict n'a de sens que pour le
+    profil qui l'a produit. Sans son empreinte dans la clé, modifier
+    ``config.REQUETE_REFERENCE`` laissait ressortir du cache des verdicts
+    rendus pour l'ancien profil. ``profil`` vaut par défaut le profil effectif
+    de ``verifier()``, ``config.REQUETE_REFERENCE``.
+    """
+    profil = config.REQUETE_REFERENCE if profil is None else profil
+    empreinte = hashlib.sha256(profil.strip().encode("utf-8")).hexdigest()[:12]
+    return f"{model}@v{VERSION_REGLES}#p{empreinte}"
+
+
+# Niveaux admis. Un petit modèle en invente d'autres (« étudiant »,
+# « intermédiaire ») : le schéma envoyé à Ollama les interdit, et
+# `normaliser_niveau` ramène dans cet ensemble ce qui passerait quand même
+# (modèle qui ignore `format`, verdicts en cache antérieurs à la contrainte).
+NIVEAUX = ("stage", "junior", "senior", "inconnu")
+
+
+def normaliser_niveau(valeur) -> str:
+    """Ramène un niveau libre dans ``NIVEAUX`` ; « inconnu » si rien ne colle."""
+    texte = unicodedata.normalize("NFKD", str(valeur or ""))
+    texte = texte.encode("ascii", "ignore").decode().strip().lower()
+    if texte in NIVEAUX:
+        return texte
+    if "senior" in texte or "confirme" in texte or "expert" in texte:
+        return "senior"
+    if "junior" in texte or "debutant" in texte or "jeune diplome" in texte:
+        return "junior"
+    if any(m in texte for m in ("stag", "etudiant", "intern", "student")):
+        return "stage"
+    return "inconnu"
+
+
+Niveau = Annotated[Literal[NIVEAUX], BeforeValidator(normaliser_niveau)]
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +122,7 @@ class VerdictLLM(BaseModel):
 
     pertinent: bool
     est_alternance: bool                 # alternance/apprentissage déguisé ?
-    niveau: str                          # "stage" | "junior" | "senior" | "inconnu"
+    niveau: Niveau                       # enum dans le schéma, normalisé à la validation
     domaine_match: bool | None = None    # IA/cyber réellement au cœur du poste ?
     duree_mois: int | None = None
     date_debut: str | None = None        # ISO ou null
@@ -252,7 +290,7 @@ class Verdict:
             pertinent=bool(donnees.get("pertinent", False)),
             score=_score_borne(donnees.get("score")),
             est_alternance=bool(donnees.get("est_alternance", False)),
-            niveau=str(donnees.get("niveau") or "inconnu"),
+            niveau=normaliser_niveau(donnees.get("niveau")),
             justification=str(donnees.get("justification") or ""),
             duree_mois=_int_ou_none(donnees.get("duree_mois")),
             date_debut=_str_ou_none(donnees.get("date_debut")),

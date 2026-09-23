@@ -70,6 +70,30 @@ def test_schema_envoye_exige_les_champs_de_decision():
     assert list(schema["properties"])[-1] == "score"  # décidé EN DERNIER
 
 
+def test_schema_envoye_contraint_le_niveau():
+    """Ollama suit `format` : l'enum empêche le modèle d'inventer un niveau."""
+    niveau = verifier.VerdictLLM.model_json_schema()["properties"]["niveau"]
+    assert niveau["enum"] == list(verifier.NIVEAUX)
+
+
+@pytest.mark.parametrize("brut, attendu", [
+    ("stage", "stage"), ("Senior", "senior"), ("junior", "junior"),
+    ("étudiant", "stage"), ("Stagiaire", "stage"), ("intern", "stage"),
+    ("intermédiaire", "inconnu"), ("", "inconnu"), (None, "inconnu"),
+])
+def test_niveau_normalise_a_la_validation(brut, attendu):
+    """Un modèle qui ignorerait l'enum ne fait pas échouer le verdict : la
+    valeur est ramenée dans NIVEAUX, « inconnu » à défaut."""
+    sortie = verifier.VerdictLLM.model_validate({**VALIDE, "niveau": brut})
+    assert sortie.niveau == attendu
+
+
+def test_niveau_d_un_verdict_en_cache_normalise():
+    """Les verdicts enregistrés avant la contrainte (« étudiant ») sont relus
+    dans l'ensemble admis."""
+    assert verifier.Verdict.from_dict({**VALIDE, "niveau": "étudiant"}).niveau == "stage"
+
+
 def test_validation_tolere_domaine_absent():
     # Le schéma l'exige de la génération ; la validation, elle, reste aussi
     # tolérante que le parsing d'avant (défaut None).

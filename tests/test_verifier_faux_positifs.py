@@ -132,3 +132,24 @@ def test_cle_cache_versionnee():
     assert cle != "qwen3:1.7b"
     assert cle.startswith("qwen3:1.7b@v")
     assert str(verifier.VERSION_REGLES) in cle
+
+
+def test_cle_cache_suit_le_profil():
+    """Un verdict vaut pour le profil qui l'a produit : changer le profil
+    (retrait d'une phrase, par exemple) doit changer la clé."""
+    a = verifier.cle_cache("qwen3:4b", "Stage IA. Entreprise du CAC40 de préférence.")
+    b = verifier.cle_cache("qwen3:4b", "Stage IA.")
+    assert a != b
+    assert a == verifier.cle_cache("qwen3:4b", "Stage IA. Entreprise du CAC40 de préférence.")
+    assert a.startswith(f"qwen3:4b@v{verifier.VERSION_REGLES}")
+
+
+def test_cle_cache_par_defaut_vise_le_profil_de_la_config(monkeypatch):
+    """Les appels historiques `cle_cache(model)` visent le profil effectif de
+    `verifier()` : celui de la configuration."""
+    import config
+
+    assert verifier.cle_cache("m") == verifier.cle_cache("m", config.REQUETE_REFERENCE)
+    avant = verifier.cle_cache("m")
+    monkeypatch.setattr(config, "REQUETE_REFERENCE", "Un tout autre profil.")
+    assert verifier.cle_cache("m") != avant
