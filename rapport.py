@@ -269,43 +269,61 @@ def section_jobs(section: Section, libelles: dict[str, str], origines: dict[str,
 
 
 _STYLE = """
-:root { --fond:#f7f7f5; --carte:#fff; --texte:#1c1c1a; --doux:#6b6b66; --bord:#e3e2dd;
-        --accent:#1f5fbf; --alerte:#9a3412; --alerte-fond:#fff4ec; --neuf:#15803d; --tag:#eef2fb; }
+/* Mêmes jetons que l'app web (app.py) : le rapport s'y affiche dans un cadre. */
+:root { color-scheme:light dark;
+        --fond:#f5f6f8; --carte:#fff; --carte-2:#f2f4f7; --texte:#101828; --doux:#475467; --pale:#98a2b3;
+        --bord:#e4e7ec; --bord-fort:#d0d5dd; --accent:#4f46e5; --accent-texte:#3730a3;
+        --alerte:#b54708; --alerte-fond:#fffaeb; --neuf:#067647; --neuf-fond:#ecfdf3; }
 @media (prefers-color-scheme: dark) {
-  :root { --fond:#141413; --carte:#1d1d1b; --texte:#ecebe6; --doux:#a3a29c; --bord:#34332f;
-          --accent:#7aa7ef; --alerte:#fdba74; --alerte-fond:#2a1d14; --neuf:#4ade80; --tag:#1f2a3d; } }
+  :root { --fond:#0b0c0f; --carte:#14161b; --carte-2:#1b1e25; --texte:#e7e9ee; --doux:#a1a8b5; --pale:#6b7280;
+          --bord:#262a33; --bord-fort:#353a45; --accent:#7c83f5; --accent-texte:#b4b9fb;
+          --alerte:#fdb022; --alerte-fond:rgba(253,176,34,.12); --neuf:#47cd89; --neuf-fond:rgba(71,205,137,.12); } }
 * { box-sizing:border-box; }
 body { margin:0; padding:24px 16px; background:var(--fond); color:var(--texte);
-       font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
-main { max-width:1280px; margin:0 auto; }
-h1 { font-size:1.5rem; margin:0 0 4px; } h2 { font-size:1.2rem; margin:32px 0 8px; }
-.meta,.legende,.brut,.date { color:var(--doux); font-size:.85rem; }
+       font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-font-smoothing:antialiased; }
+main { max-width:1440px; margin:0 auto; }
+h1 { font-size:1.4rem; margin:0 0 4px; letter-spacing:-.01em; }
+h2 { font-size:1.1rem; margin:32px 0 6px; letter-spacing:-.01em; }
+.meta,.legende,.brut,.date { color:var(--doux); font-size:.82rem; }
+.legende { max-width:110ch; }
 .run { margin:4px 0; }
 .alerte { background:var(--alerte-fond); color:var(--alerte); padding:6px 10px; border-radius:6px; margin:4px 0; }
-.ecartee { color:var(--doux); margin:2px 0; font-size:.9rem; }
-.compte { margin:4px 0; } .compte .cle { color:var(--doux); margin-right:6px; }
+.ecartee { color:var(--doux); margin:2px 0; font-size:.86rem; }
+.compte { margin:4px 0; } .compte .cle { color:var(--pale); margin-right:6px; font-weight:600; }
 .compte .zero { color:var(--alerte); }
-.outils { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin:12px 0; }
-.filtre-texte { padding:6px 10px; border:1px solid var(--bord); border-radius:6px; min-width:220px;
+.outils { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; margin:14px 0 12px; }
+.filtre-texte { font:inherit; padding:6px 10px; border:1px solid var(--bord-fort); border-radius:8px; min-width:260px;
                 background:var(--carte); color:var(--texte); }
-button { font:inherit; font-size:.85rem; padding:3px 10px; border:1px solid var(--bord);
-         border-radius:999px; background:var(--carte); color:var(--texte); cursor:pointer; }
-button.actif { background:var(--accent); border-color:var(--accent); color:#fff; }
-th button { border-radius:6px; }
-.defile { overflow-x:auto; background:var(--carte); border:1px solid var(--bord); border-radius:8px; }
+.familles { display:flex; flex-wrap:wrap; gap:6px; }
+button { font:inherit; font-size:.8rem; font-weight:500; padding:4px 11px; border:1px solid var(--bord-fort);
+         border-radius:999px; background:var(--carte); color:var(--doux); cursor:pointer; }
+button:hover { color:var(--texte); background:var(--carte-2); }
+button.actif { background:var(--texte); border-color:var(--texte); color:var(--carte); }
+th button { border:0; background:transparent; padding:0; border-radius:0; font:inherit; color:inherit;
+            text-transform:inherit; letter-spacing:inherit; }
+th button:hover { background:transparent; color:var(--texte); }
+th button.actif { background:transparent; color:var(--accent-texte); }
+.defile { overflow-x:auto; background:var(--carte); border:1px solid var(--bord); border-radius:10px; }
 table { border-collapse:collapse; width:100%; }
-th, td { padding:8px 10px; border-bottom:1px solid var(--bord); text-align:left; vertical-align:top; font-size:.9rem; }
-th { position:sticky; top:0; background:var(--carte); font-weight:600; }
-td.titre { min-width:260px; font-weight:500; } td.num, td.trajet { white-space:nowrap; }
-td.inconnu { color:var(--doux); }
-.lien { display:inline-block; margin:0 4px 4px 0; padding:1px 8px; border-radius:4px; background:var(--tag);
-        color:var(--accent); text-decoration:none; font-size:.8rem; white-space:nowrap; }
-.tags { margin-top:4px; display:flex; flex-wrap:wrap; gap:4px; }
-.tag { font-size:.72rem; padding:0 6px; border-radius:999px; border:1px solid var(--bord); color:var(--doux); }
-.tag.titre { border-color:var(--accent); color:var(--accent); }
+th, td { padding:11px 12px; border-bottom:1px solid var(--bord); text-align:left; vertical-align:top; font-size:.86rem; }
+tbody tr:last-child td { border-bottom:0; }
+tbody tr:hover { background:var(--carte-2); }
+th { position:sticky; top:0; background:var(--carte-2); color:var(--doux); font-weight:600; font-size:.72rem;
+     text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; padding-top:9px; padding-bottom:9px; }
+td.titre { min-width:260px; font-weight:600; } td.num, td.trajet { white-space:nowrap; color:var(--doux); }
+td.trajet strong { color:var(--texte); }
+td.inconnu { color:var(--pale); }
+.lien { display:inline-block; margin:0 4px 4px 0; padding:1px 8px; border-radius:6px; background:var(--carte-2);
+        border:1px solid var(--bord); color:var(--doux); text-decoration:none; font-size:.74rem; white-space:nowrap; }
+.lien:hover { color:var(--accent-texte); border-color:var(--accent); }
+.tags { margin-top:6px; display:flex; flex-wrap:wrap; gap:4px; }
+.tag { font-size:.72rem; font-weight:500; padding:0 7px; border-radius:999px; border:1px solid var(--bord-fort); color:var(--pale); }
+.tag.titre { border-color:var(--accent); color:var(--accent-texte); }
 .drapeau { font-size:.72rem; color:var(--alerte); }
-.neuf { font-size:.7rem; font-weight:700; color:#fff; background:var(--neuf); padding:0 6px; border-radius:999px; }
+.neuf { font-size:.66rem; font-weight:700; color:var(--neuf); background:var(--neuf-fond); padding:1px 7px;
+        border-radius:999px; text-transform:uppercase; letter-spacing:.04em; margin-right:4px; }
 .estim { font-size:.7rem; color:var(--alerte); }
+.vide { color:var(--pale); }
 """
 
 _SCRIPT = """
@@ -389,7 +407,7 @@ def rendre_jobs(jobs: Section, origines: dict[str, str]) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jobs étudiants</title>
-<style>{_STYLE} body {{ padding-top:0; }} h2 {{ margin-top:8px; }}</style>
+<style>{_STYLE} body {{ padding:0 1px; background:transparent; }} h2 {{ margin-top:4px; }}</style>
 </head>
 <body>
 <main>

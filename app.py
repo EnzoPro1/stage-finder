@@ -863,229 +863,393 @@ PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stage Finder</title>
 <style>
-  :root { color-scheme: light dark; }
+  /* --- Jetons de design : une seule couleur d'accent, clair et sombre ---- */
+  :root {
+    color-scheme: light dark;
+    --fond: #f5f6f8; --surface: #ffffff; --surface-2: #f2f4f7; --bord: #e4e7ec;
+    --bord-fort: #d0d5dd; --texte: #101828; --doux: #475467; --pale: #98a2b3;
+    --accent: #4f46e5; --accent-survol: #4338ca; --accent-doux: #eef2ff; --accent-texte: #3730a3;
+    --ok: #067647; --ok-doux: #ecfdf3; --moyen: #b54708; --moyen-doux: #fffaeb;
+    --ko: #b42318; --ko-doux: #fef3f2; --ia: #6941c6; --ia-doux: #f4f3ff;
+    --ombre: 0 1px 2px rgba(16,24,40,.05);
+    --rayon: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fond: #0b0c0f; --surface: #14161b; --surface-2: #1b1e25; --bord: #262a33;
+      --bord-fort: #353a45; --texte: #e7e9ee; --doux: #a1a8b5; --pale: #6b7280;
+      --accent: #7c83f5; --accent-survol: #939af8; --accent-doux: rgba(124,131,245,.14); --accent-texte: #b4b9fb;
+      --ok: #47cd89; --ok-doux: rgba(71,205,137,.12); --moyen: #fdb022; --moyen-doux: rgba(253,176,34,.12);
+      --ko: #f97066; --ko-doux: rgba(249,112,102,.12); --ia: #b692f6; --ia-doux: rgba(182,146,246,.13);
+      --ombre: none;
+    }
+  }
   * { box-sizing: border-box; }
-  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-         margin: 0; padding: 1.5rem; background: #f6f7f9; color: #1a1a1a; }
-  h1 { margin: 0 0 .2rem; font-size: 1.4rem; }
-  .meta { color: #666; font-size: .85rem; margin-bottom: 1rem; }
-  .ref { background: #fff; border-left: 4px solid #1a9850; padding: .6rem .9rem;
-         border-radius: 6px; margin-bottom: 1rem; font-size: .9rem; }
-  .barre-outils { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center;
-                  margin-bottom: 1rem; }
-  .barre-outils input[type=number] { width: 4.5rem; padding: .4rem; border: 1px solid #ccc;
-         border-radius: 6px; font-size: .9rem; }
-  button { padding: .45rem .8rem; border: 0; border-radius: 6px; font-size: .88rem;
-           font-weight: 600; cursor: pointer; background: #1d4ed8; color: #fff; }
-  button.sec { background: #e5e7eb; color: #222; }
-  button.pri { background: linear-gradient(90deg,#7c3aed,#db2777); color: #fff;
-               padding: .55rem 1rem; font-size: .92rem; box-shadow: 0 1px 4px rgba(124,58,237,.35); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  .filtre input { padding: .45rem .7rem; border: 1px solid #ccc; border-radius: 6px;
-                  min-width: 240px; font-size: .9rem; }
-  .chk { font-size: .84rem; color: #444; display: flex; align-items: center; gap: .3rem;
-         cursor: pointer; }
-  .prog { flex: 1 1 220px; min-width: 200px; }
-  .prog .bar { background: #e5e7eb; border-radius: 999px; height: 10px; overflow: hidden; }
-  .prog .bar span { display: block; height: 100%; background: linear-gradient(90deg,#7c3aed,#db2777);
-                    width: 0; transition: width .3s; }
-  .prog .txt { font-size: .78rem; color: #555; margin-top: .2rem; }
-  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px;
-          overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  th, td { padding: .5rem .6rem; text-align: left; border-bottom: 1px solid #eee;
-           font-size: .88rem; vertical-align: top; }
-  th { background: #1f2937; color: #fff; position: sticky; top: 0; font-weight: 600;
-       cursor: pointer; user-select: none; white-space: nowrap; }
-  th.actif { background: #0f766e; }
-  .rk { text-align: center; font-weight: 700; width: 2.6rem; }
-  .cos { color: #888; }
-  .ia  { color: #6d28d9; }
-  .delta-up { color: #16a34a; font-weight: 700; }
-  .delta-down { color: #dc2626; font-weight: 700; }
-  .delta-zero { color: #9ca3af; }
-  .delta-new { background: #16a34a; color: #fff; padding: .05rem .35rem; border-radius: 999px;
-               font-size: .68rem; font-weight: 700; }
-  a.titre { color: #1d4ed8; text-decoration: none; font-weight: 600; }
-  a.titre:hover { text-decoration: underline; }
-  .badges { margin-top: .25rem; display: flex; gap: .25rem; flex-wrap: wrap; }
-  .badge { background: #e0edff; color: #1d4ed8; padding: .05rem .45rem; border-radius: 999px;
-           font-size: .68rem; font-weight: 600; }
-  .badge-combo { background: linear-gradient(90deg,#7c3aed,#db2777); color: #fff;
-                 padding: .05rem .5rem; border-radius: 999px; font-size: .68rem; font-weight: 700; }
-  .llm-score { background: #ede9fe; color: #6d28d9; padding: .05rem .4rem; border-radius: 4px;
-               font-size: .72rem; font-weight: 700; }
-  .llm-ko { background: #fee2e2; color: #b91c1c; padding: .05rem .4rem; border-radius: 4px;
-            font-size: .68rem; font-weight: 600; }
-  .drapeau { display: inline-block; background: #fff7ed; color: #9a3412; padding: .05rem .4rem;
-             border-radius: 4px; font-size: .68rem; margin: .15rem .15rem 0 0; }
-  /* Bouton de dépliage de l'analyse IA (dans la ligne de l'offre). */
-  .btn-analyse { background: #ede9fe; color: #6d28d9; font-size: .7rem; font-weight: 700;
-                 padding: .1rem .5rem; border-radius: 999px; margin-top: .3rem; }
-  /* Panneau d'analyse : ligne PLEINE LARGEUR sous l'offre. Le paragraphe du LLM
-     y est lisible en entier — dans la cellule étroite d'origine, il était
-     illisible et rogné. */
-  tr.analyse > td { background: #faf5ff; border-bottom: 2px solid #e9d5ff;
-                    padding: .8rem 1.2rem 1rem 3.4rem; }
-  .an-titre { font-size: .74rem; font-weight: 700; color: #6d28d9; text-transform: uppercase;
-              letter-spacing: .04em; margin-bottom: .45rem; }
-  .an-meta { font-weight: 500; color: #7c6a94; text-transform: none; letter-spacing: 0;
-             margin-left: .5rem; }
-  .an-texte { margin: 0; font-size: .95rem; line-height: 1.65; color: #262626; max-width: 78ch;
-              white-space: pre-wrap; }
-  .an-drapeaux { margin-top: .65rem; font-size: .85rem; color: #9a3412; }
-  .an-drapeaux ul { margin: .25rem 0 0; padding-left: 1.2rem; line-height: 1.55; }
-  .an-vide { color: #888; font-size: .85rem; font-style: italic; }
-  .src { background: #eef; color: #334; padding: .05rem .4rem; border-radius: 4px; font-size: .72rem; }
-  .vide { text-align: center; color: #999; padding: 2rem; }
-  /* --- Colonne « CV » (CP4) -------------------------------------------- */
+  body { margin: 0; background: var(--fond); color: var(--texte);
+         font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  code { font-size: .85em; background: var(--surface-2); padding: .05rem .3rem; border-radius: 4px; }
+
+  /* --- En-tête ------------------------------------------------------------ */
+  header.entete { background: var(--surface); border-bottom: 1px solid var(--bord); }
+  .entete-in, .onglets, main.contenu, .prog-in { max-width: 1440px; margin: 0 auto; padding: 0 24px; }
+  .entete-in { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+               padding-top: 16px; padding-bottom: 12px; }
+  .marque { display: flex; align-items: center; gap: 12px; }
+  .logo { width: 36px; height: 36px; border-radius: 9px; background: var(--accent); color: #fff;
+          display: grid; place-items: center; flex: none; }
+  .nom { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
+  .slogan { color: var(--doux); font-size: .82rem; }
+  .pastille-modele { display: inline-flex; align-items: center; gap: 8px; font-size: .8rem;
+                     color: var(--doux); border: 1px solid var(--bord); border-radius: 999px;
+                     padding: 4px 12px; background: var(--surface); white-space: nowrap; }
+  .pastille-modele strong { color: var(--texte); font-weight: 600; }
+  .point { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .onglets { display: flex; gap: 4px; }
+  .onglets button { background: transparent; color: var(--doux); border: 0; border-radius: 0;
+                    padding: 10px 12px; margin-bottom: -1px; font-weight: 600; font-size: .9rem;
+                    border-bottom: 2px solid transparent; box-shadow: none; }
+  .onglets button:hover { background: transparent; }
+  .onglets button:hover:not(.actif) { color: var(--texte); }
+  .onglets button.actif { color: var(--accent-texte); border-bottom-color: var(--accent); }
+  .onglets .compteur { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px;
+                       background: var(--surface-2); color: var(--doux); font-size: .75rem; font-weight: 600; }
+  .onglets button.actif .compteur { background: var(--accent-doux); color: var(--accent-texte); }
+
+  /* --- Barre de progression (sous l'en-tête) ----------------------------- */
+  .prog { background: var(--accent-doux); border-bottom: 1px solid var(--bord); }
+  .prog-in { display: flex; align-items: center; gap: 14px; padding-top: 10px; padding-bottom: 10px; }
+  .prog .bar { flex: 0 0 220px; background: var(--surface); border-radius: 999px; height: 6px; overflow: hidden; }
+  .prog .bar span { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+  .prog .txt { font-size: .82rem; color: var(--accent-texte); font-weight: 500; }
+
+  main.contenu { padding-top: 24px; padding-bottom: 48px; }
+
+  /* --- Boutons et champs ------------------------------------------------- */
+  button { font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; border-radius: 8px;
+           padding: 7px 12px; border: 1px solid transparent; background: var(--accent); color: #fff;
+           transition: background .15s, border-color .15s; }
+  button:hover { background: var(--accent-survol); }
+  button.sec { background: var(--surface); color: var(--texte); border-color: var(--bord-fort); box-shadow: var(--ombre); }
+  button.sec:hover { background: var(--surface-2); }
+  button.pri { background: var(--accent); color: #fff; }
+  button.pri:hover { background: var(--accent-survol); }
+  button:disabled, button:disabled:hover { opacity: .5; cursor: not-allowed; }
+  input[type=number], input[type=search], input.texte {
+    font: inherit; color: var(--texte); background: var(--surface); border: 1px solid var(--bord-fort);
+    border-radius: 8px; padding: 6px 10px; box-shadow: var(--ombre); }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  input[type=number] { width: 4.2rem; padding: 5px 8px; }
+  input[type=checkbox] { accent-color: var(--accent); margin: 0; }
+  .chk { font-size: .84rem; color: var(--doux); display: inline-flex; align-items: center; gap: 7px;
+         cursor: pointer; user-select: none; }
+
+  /* --- Cartes ------------------------------------------------------------ */
+  .carte { background: var(--surface); border: 1px solid var(--bord); border-radius: var(--rayon);
+           box-shadow: var(--ombre); padding: 16px 18px; }
+  .etiquette { font-size: .72rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+               color: var(--pale); margin-bottom: 6px; }
+  .meta { color: var(--doux); font-size: .8rem; }
+
+  /* Chiffres clés */
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .stat { background: var(--surface); border: 1px solid var(--bord); border-radius: var(--rayon);
+          box-shadow: var(--ombre); padding: 14px 18px; }
+  .stat .v { font-size: 1.6rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.2;
+             font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--doux); font-size: .8rem; }
+  .stat .v small { font-size: .85rem; font-weight: 500; color: var(--pale); margin-left: 4px; }
+
+  .grille-haut { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; margin-bottom: 12px; }
+  .profil { display: flex; flex-direction: column; }
+  .profil p { margin: 0 0 12px; font-size: .92rem; line-height: 1.6; max-width: 95ch; }
+  .profil .meta { margin-top: auto; }
+  .actions { display: flex; flex-direction: column; gap: 10px; }
+  .actions .etiquette { margin-bottom: 0; }
+  button.large { width: 100%; padding: 10px 14px; font-size: .92rem; display: flex; align-items: center;
+                 justify-content: center; gap: 8px; }
+  button.large span { font-weight: 500; opacity: .8; font-size: .8rem; }
+  .actions-ligne { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .actions-ligne button.sec { flex: 1; }
+  .champ-n { font-size: .84rem; color: var(--doux); display: inline-flex; align-items: center; gap: 7px; }
+  .statut { color: var(--doux); font-size: .82rem; }
+
+  /* Sections repliables (bilan du run) */
+  details.repli { padding: 0; margin-bottom: 12px; }
+  details.repli > summary { list-style: none; cursor: pointer; padding: 12px 18px; display: flex;
+                            align-items: center; gap: 10px; font-weight: 600; font-size: .88rem; }
+  details.repli > summary::-webkit-details-marker { display: none; }
+  details.repli > summary::before { content: ""; width: 7px; height: 7px; border-right: 2px solid var(--pale);
+                                    border-bottom: 2px solid var(--pale); transform: rotate(-45deg);
+                                    transition: transform .15s; margin-right: 2px; }
+  details.repli[open] > summary::before { transform: rotate(45deg); }
+  details.repli .resume { color: var(--pale); font-weight: 400; font-size: .82rem; }
+  details.repli > .entete-run { padding: 0 18px 14px 36px; }
+
+  /* Bilan du dernier run (bloc rendu par rapport.entete) */
+  .entete-run { font-size: .82rem; color: var(--doux); }
+  .entete-run p { margin: 4px 0; }
+  .entete-run .run { color: var(--texte); }
+  .entete-run .alerte { background: var(--moyen-doux); color: var(--moyen); padding: 4px 10px; border-radius: 6px; }
+  .entete-run .ecartee, .entete-run .brut, .entete-run .cle { color: var(--pale); }
+  .entete-run .cle { margin-right: 6px; font-weight: 600; }
+  .entete-run .zero { color: var(--moyen); }
+
+  /* --- État du marché ---------------------------------------------------- */
+  .marche { margin-bottom: 16px; }
+  .marche-tete { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .marche-tete strong { font-size: .92rem; }
+  .marche-sous { color: var(--pale); font-size: .82rem; flex: 1; }
+  .marche-verdict { margin-top: 14px; padding: 10px 14px; border-radius: 8px; font-size: .88rem; line-height: 1.55; }
+  .t-confortable { background: var(--ok-doux); border-left: 3px solid var(--ok); }
+  .t-correct     { background: var(--moyen-doux); border-left: 3px solid var(--moyen); }
+  .t-étroit      { background: var(--ko-doux); border-left: 3px solid var(--ko); }
+  .t-inconnu     { background: var(--surface-2); border-left: 3px solid var(--pale); }
+  .marche-grille { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 14px; }
+  .marche-grille > div { flex: 1 1 320px; }
+  table.mini { width: 100%; border-collapse: collapse; }
+  table.mini th, table.mini td { padding: 6px 8px; font-size: .8rem; border-bottom: 1px solid var(--bord); text-align: left; }
+  table.mini th { color: var(--pale); font-weight: 600; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+  table.mini td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .hausse { color: var(--ok); font-weight: 600; }
+  .baisse { color: var(--ko); font-weight: 600; }
+  .note { color: var(--pale); font-size: .76rem; margin-top: 10px; line-height: 1.55; }
+
+  /* --- Filtres ----------------------------------------------------------- */
+  .barre-filtres { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 12px; }
+  .recherche { position: relative; flex: 0 1 300px; }
+  .recherche svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--pale); }
+  .recherche input { width: 100%; padding-left: 32px; }
+  .familles { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .familles button { background: var(--surface); color: var(--doux); border: 1px solid var(--bord-fort);
+                     border-radius: 999px; padding: 4px 11px; font-weight: 500; font-size: .8rem; }
+  .familles button:hover { background: var(--surface-2); color: var(--texte); }
+  .familles button.actif { background: var(--texte); color: var(--surface); border-color: var(--texte); }
+  .options { display: flex; gap: 16px; margin-left: auto; flex-wrap: wrap; }
+
+  /* --- Tableau des offres ------------------------------------------------ */
+  .table-cadre { background: var(--surface); border: 1px solid var(--bord); border-radius: var(--rayon);
+                 box-shadow: var(--ombre); overflow-x: auto; }
+  table#tbl { width: 100%; border-collapse: collapse; }
+  #tbl th, #tbl td { padding: 12px 12px; text-align: left; border-bottom: 1px solid var(--bord); vertical-align: top; }
+  #tbl tbody tr:last-child td { border-bottom: 0; }
+  #tbl th { background: var(--surface-2); color: var(--doux); font-size: .72rem; font-weight: 600;
+            text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; position: sticky; top: 0;
+            z-index: 1; padding-top: 9px; padding-bottom: 9px; }
+  #tbl th[data-tri] { cursor: pointer; user-select: none; }
+  #tbl th[data-tri]:hover { color: var(--texte); }
+  #tbl th.actif { color: var(--accent-texte); }
+  #tbl tbody tr:not(.analyse):hover { background: var(--surface-2); }
+  .rk { width: 3.8rem; text-align: center !important; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .rang { font-weight: 700; font-size: .95rem; }
+  .rang-ia { font-weight: 600; color: var(--ia); }
+  .delta-up, .delta-down, .delta-zero { display: block; font-size: .72rem; font-weight: 600; margin-top: 2px; }
+  .delta-up { color: var(--ok); } .delta-down { color: var(--ko); } .delta-zero { color: var(--pale); }
+  td.offre { min-width: 340px; }
+  a.titre { color: var(--texte); text-decoration: none; font-weight: 600; font-size: .92rem; }
+  a.titre:hover { color: var(--accent-texte); text-decoration: underline; }
+  .sous { color: var(--doux); font-size: .82rem; margin-top: 2px; }
+  .sous .sep { color: var(--pale); margin: 0 6px; }
+  .badges { margin-top: 8px; display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  .badge { background: var(--accent-doux); color: var(--accent-texte); padding: 1px 8px; border-radius: 999px;
+           font-size: .72rem; font-weight: 600; }
+  .badge-combo { background: var(--ia); color: #fff; padding: 1px 8px; border-radius: 999px;
+                 font-size: .72rem; font-weight: 600; }
+  .fam { font-size: .72rem; padding: 0 7px; border-radius: 999px; border: 1px solid var(--bord-fort); color: var(--pale); }
+  .fam.titre { border-color: var(--accent); color: var(--accent-texte); }
+  .delta-new { background: var(--ok-doux); color: var(--ok); padding: 1px 7px; border-radius: 999px;
+               font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+               margin-right: 6px; vertical-align: 1px; }
+  td.num { white-space: nowrap; color: var(--doux); font-variant-numeric: tabular-nums; }
+  td.age { white-space: nowrap; color: var(--doux); }
+  .vide { text-align: center !important; color: var(--pale); padding: 48px !important; }
+
+  /* Verdict IA : pastilles dans la ligne, analyse complète en dessous */
+  .score { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 6px;
+           font-size: .74rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .score::before { content: "IA"; font-weight: 600; opacity: .7; font-size: .68rem; }
+  .s-haut  { background: var(--ok-doux); color: var(--ok); }
+  .s-moyen { background: var(--moyen-doux); color: var(--moyen); }
+  .s-bas   { background: var(--ko-doux); color: var(--ko); }
+  .llm-ko { background: var(--ko-doux); color: var(--ko); padding: 1px 8px; border-radius: 6px;
+            font-size: .72rem; font-weight: 600; }
+  .niveau { background: var(--surface-2); color: var(--doux); padding: 1px 8px; border-radius: 6px;
+            font-size: .72rem; font-weight: 500; }
+  .drapeau { display: inline-block; background: var(--moyen-doux); color: var(--moyen); padding: 1px 8px;
+             border-radius: 6px; font-size: .72rem; font-weight: 500; }
+  .btn-analyse { background: transparent; color: var(--accent-texte); border: 0; padding: 1px 4px;
+                 font-size: .76rem; font-weight: 600; }
+  .btn-analyse:hover { background: transparent; text-decoration: underline; }
+  tr.analyse > td { background: var(--ia-doux); padding: 14px 20px 16px 7.6rem !important; }
+  .an-titre { font-size: .72rem; font-weight: 700; color: var(--ia); text-transform: uppercase;
+              letter-spacing: .06em; margin-bottom: 6px; }
+  .an-meta { font-weight: 500; color: var(--doux); text-transform: none; letter-spacing: 0; margin-left: 8px; }
+  .an-texte { margin: 0; font-size: .9rem; line-height: 1.65; max-width: 90ch; white-space: pre-wrap; }
+  .an-drapeaux { margin-top: 10px; font-size: .84rem; color: var(--moyen); }
+  .an-drapeaux ul { margin: 4px 0 0; padding-left: 1.2rem; line-height: 1.6; }
+  .an-vide { color: var(--pale); font-size: .85rem; font-style: italic; margin: 0; }
+  .src { background: var(--surface-2); color: var(--doux); padding: 1px 6px; border-radius: 4px; font-size: .72rem; }
+  a.lien { display: inline-block; margin: 0 4px 4px 0; padding: 1px 8px; border-radius: 6px; background: var(--surface-2);
+           border: 1px solid var(--bord); color: var(--doux); text-decoration: none; font-size: .74rem; white-space: nowrap; }
+  a.lien:hover { color: var(--accent-texte); border-color: var(--accent); }
+
+  /* --- Colonne « CV » ------------------------------------------------------ */
   td.cv { white-space: nowrap; }
-  .cv button { font-size: .72rem; padding: .22rem .55rem; font-weight: 700; }
-  .cv-generer   { background: #1d4ed8; color: #fff; }
-  .cv-attente   { background: #e5e7eb; color: #4b5563; }
-  .cv-encours   { background: #ede9fe; color: #6d28d9; }
-  .cv-pret      { background: #16a34a; color: #fff; }
-  .cv-echec     { background: #fee2e2; color: #b91c1c; }
-  .cv-sans-texte{ background: #f3f4f6; color: #9ca3af; }
-  .cv-second    { background: transparent; color: #6b7280; text-decoration: underline;
-                  font-weight: 600; padding: .2rem .3rem; }
-  .cv-msg { display: block; margin-top: .25rem; font-size: .7rem; color: #b91c1c;
+  .cv button { font-size: .76rem; padding: 4px 10px; border-radius: 7px; }
+  .cv-generer    { background: var(--surface); color: var(--texte); border-color: var(--bord-fort) !important; }
+  .cv-generer:hover { background: var(--surface-2); }
+  .cv-attente, .cv-attente:hover { background: var(--surface-2); color: var(--doux); }
+  .cv-encours, .cv-encours:hover { background: var(--ia-doux); color: var(--ia); }
+  .cv-pret       { background: var(--ok); color: #fff; }
+  .cv-pret:hover { background: var(--ok); filter: brightness(1.08); }
+  .cv-echec      { background: var(--ko-doux); color: var(--ko); }
+  .cv-echec:hover { background: var(--ko-doux); }
+  .cv-sans-texte, .cv-sans-texte:hover { background: transparent; color: var(--pale); border-color: var(--bord) !important; }
+  .cv-second { background: transparent; color: var(--doux); text-decoration: underline; font-weight: 500;
+               padding: 4px 4px !important; }
+  .cv-second:hover { background: transparent; color: var(--texte); }
+  .cv-msg { display: block; margin-top: 4px; font-size: .72rem; color: var(--ko);
             max-width: 15rem; white-space: normal; line-height: 1.35; }
   /* Point clignotant pendant la génération : un CV prend plusieurs minutes,
      il faut que la page dise qu'elle n'est pas figée. */
   .cv-pouls::before { content: "●"; margin-right: .3rem; animation: pouls 1.2s infinite; }
   @keyframes pouls { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
-  /* --- Panneau « état du marché » ------------------------------------- */
-  .marche { background: #fff; border-radius: 8px; padding: .8rem 1rem; margin-bottom: 1rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  .marche-tete { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-  .marche-sous { color: #777; font-size: .8rem; flex: 1; }
-  .marche-verdict { margin-top: .7rem; padding: .6rem .8rem; border-radius: 6px;
-                    font-size: .92rem; line-height: 1.5; }
-  .t-confortable { background: #ecfdf5; border-left: 4px solid #16a34a; }
-  .t-correct     { background: #fffbeb; border-left: 4px solid #d97706; }
-  .t-étroit      { background: #fef2f2; border-left: 4px solid #dc2626; }
-  .t-inconnu     { background: #f3f4f6; border-left: 4px solid #9ca3af; }
-  .marche-grille { display: flex; gap: 1.2rem; flex-wrap: wrap; margin-top: .8rem; }
-  .marche-grille > div { flex: 1 1 320px; }
-  table.mini { width: 100%; border-collapse: collapse; background: transparent; box-shadow: none; }
-  table.mini th, table.mini td { padding: .3rem .45rem; font-size: .82rem; border-bottom: 1px solid #f0f0f0; }
-  table.mini th { background: #f3f4f6; color: #374151; position: static; cursor: default;
-                  font-weight: 600; }
-  table.mini td.n { text-align: right; font-variant-numeric: tabular-nums; }
-  .hausse { color: #16a34a; font-weight: 700; }
-  .baisse { color: #dc2626; font-weight: 700; }
-  .note { color: #777; font-size: .76rem; margin-top: .5rem; line-height: 1.5; }
-  .pill { font-size: .72rem; padding: .1rem .5rem; border-radius: 999px; background: #ede9fe; color: #6d28d9; }
-  /* --- Onglets Stages / Jobs étudiants --------------------------------- */
-  .onglets { display: flex; gap: .4rem; margin: .4rem 0 1rem; border-bottom: 2px solid #e5e7eb; }
-  .onglets button { background: transparent; color: #374151; border-radius: 6px 6px 0 0;
-                    padding: .55rem 1.1rem; font-size: .95rem; margin-bottom: -2px;
-                    border-bottom: 2px solid transparent; }
-  .onglets button.actif { color: #1d4ed8; border-bottom-color: #1d4ed8; background: #fff; }
-  .onglets .compteur { font-weight: 500; color: #6b7280; font-size: .8rem; margin-left: .3rem; }
-  iframe.vue { width: 100%; height: calc(100vh - 12rem); min-height: 480px; border: 0;
-               background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  /* --- En-tête du dernier run (bloc rendu par rapport.entete) ---------- */
-  .entete-run { background: #fff; border-radius: 8px; padding: .6rem .9rem; margin-bottom: 1rem;
-                box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: .85rem; }
-  .entete-run p { margin: .2rem 0; }
-  .entete-run .alerte { background: #fff4ec; color: #9a3412; padding: .3rem .6rem; border-radius: 6px; }
-  .entete-run .ecartee, .entete-run .brut, .entete-run .cle { color: #6b7280; }
-  .entete-run .cle { margin-right: .4rem; }
-  .entete-run .zero { color: #9a3412; }
-  /* --- Liens, familles, âge -------------------------------------------- */
-  a.lien { display: inline-block; margin: 0 .25rem .25rem 0; padding: .05rem .45rem; border-radius: 4px;
-           background: #eef; color: #1d4ed8; text-decoration: none; font-size: .72rem; white-space: nowrap; }
-  a.lien:hover { text-decoration: underline; }
-  .fam { font-size: .66rem; padding: 0 .4rem; border-radius: 999px; border: 1px solid #d1d5db; color: #6b7280; }
-  .fam.titre { border-color: #1d4ed8; color: #1d4ed8; }
-  .familles { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
-  .familles button { background: #fff; color: #374151; border: 1px solid #d1d5db; border-radius: 999px;
-                     padding: .2rem .65rem; font-weight: 500; font-size: .8rem; }
-  .familles button.actif { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
-  td.age { white-space: nowrap; color: #555; }
+
+  /* --- Onglet jobs étudiants --------------------------------------------- */
+  #onglet-etudiants .actions { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 12px; }
+  iframe.vue { display: block; width: 100%; height: calc(100vh - 15rem); min-height: 480px; border: 0;
+               background: transparent; }
+
+  @media (max-width: 1000px) {
+    .grille-haut { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .options { margin-left: 0; }
+  }
+  @media (max-width: 640px) {
+    .entete-in, .onglets, main.contenu, .prog-in { padding-left: 16px; padding-right: 16px; }
+    .slogan { display: none; }
+    .prog .bar { flex-basis: 80px; }
+  }
 </style>
 </head>
 <body>
-  <h1>🎯 Stage Finder <span class="pill" id="modele">—</span></h1>
-
-  <nav class="onglets">
-    <button type="button" data-onglet="stages" onclick="ouvrirOnglet('stages')">🎓 Stages</button>
-    <button type="button" data-onglet="etudiants" onclick="ouvrirOnglet('etudiants')">🧑‍🍳 Jobs étudiants</button>
-  </nav>
-
-  <div class="barre-outils">
-    <div class="prog" id="prog" style="display:none">
-      <div class="bar"><span id="prog-bar"></span></div>
-      <div class="txt" id="prog-txt"></div>
+<header class="entete">
+  <div class="entete-in">
+    <div class="marque">
+      <span class="logo" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg>
+      </span>
+      <div>
+        <div class="nom">Stage Finder</div>
+        <div class="slogan">Collecte multi-sources, classement sémantique et vérification par LLM local</div>
+      </div>
     </div>
+    <span class="pastille-modele" title="Modèle de vérification, exécuté en local par Ollama">
+      <span class="point"></span>LLM local <strong id="modele">—</strong></span>
   </div>
+  <nav class="onglets">
+    <button type="button" data-onglet="stages" onclick="ouvrirOnglet('stages')">Stages</button>
+    <button type="button" data-onglet="etudiants" onclick="ouvrirOnglet('etudiants')">Jobs étudiants</button>
+  </nav>
+</header>
 
+<div class="prog" id="prog" style="display:none">
+  <div class="prog-in">
+    <div class="bar"><span id="prog-bar"></span></div>
+    <div class="txt" id="prog-txt"></div>
+  </div>
+</div>
+
+<main class="contenu">
   <section id="onglet-etudiants" hidden>
-    <div class="barre-outils">
+    <div class="carte actions">
       <button id="btn-etudiants" class="pri" onclick="chercherEtudiants()"
-              title="Collecte autour des 3 origines, temps de trajet, dédup, puis enregistrement dans jobs_etudiants.db.">
-        🔎 Chercher les jobs étudiants</button>
+              title="Collecte autour des origines, temps de trajet, dédup, puis enregistrement dans jobs_etudiants.db.">
+        Chercher les jobs étudiants</button>
       <label class="chk" title="Sans Indeed (scraping JobSpy) : France Travail et Careerjet seulement. Plus rapide, moins d'offres.">
-        <input type="checkbox" id="sans-indeed"> rapide (sans Indeed)</label>
-      <span class="meta" id="etudiants-statut" style="margin:0"></span>
+        <input type="checkbox" id="sans-indeed"> Rapide (sans Indeed)</label>
+      <span class="statut" id="etudiants-statut"></span>
     </div>
     <iframe class="vue" id="vue-etudiants" title="Jobs étudiants"></iframe>
   </section>
 
   <section id="onglet-stages">
-  <div class="meta" id="meta">Chargement…</div>
-  <div class="ref" id="ref"></div>
-  <div class="entete-run" id="entete-stages"></div>
+    <div class="stats" id="stats"></div>
 
-  <div class="barre-outils">
-    <button id="btn-tout" class="pri" onclick="toutLancer()"
-            title="Enchaîne automatiquement la recherche sur toutes les sources PUIS la vérification IA. Rien d'autre à cliquer.">
-      🚀 Tout lancer (recherche + IA)</button>
-    <label>Vérifier les <input type="number" id="n" min="1" value="10"> premières</label>
-    <button id="btn-verif" class="sec" onclick="lancerVerif()">🔎 Vérification IA seule</button>
-    <button id="btn-refresh" class="sec" onclick="rafraichir()">🔄 Recherche seule</button>
-    <label class="chk" title="Interroge seulement les API (Adzuna, Careerjet, Free-Work, pages carrières) sans scraper LinkedIn/Indeed : plusieurs minutes de moins, mais moins d'offres.">
-      <input type="checkbox" id="nojobspy"> rapide (sans JobSpy)</label>
-    <span class="filtre"><input id="q" placeholder="🔎 filtrer (titre, entreprise…)" oninput="rendre()"></span>
-    <label class="chk" title="Déplie l'analyse écrite par le LLM sous chaque offre vérifiée.">
-      <input type="checkbox" id="tout-deplier" onchange="basculerTout(this.checked)"> déplier les analyses IA</label>
-  </div>
-  <div class="barre-outils">
-    <div class="familles" id="familles"></div>
-    <label class="chk" title="Par défaut, une famille ne retient que les offres qui la portent dans leur TITRE. Coché : aussi celles qui l'ont seulement dans la description ou par la requête qui les a trouvées.">
-      <input type="checkbox" id="elargir" onchange="rendre()"> inclure les familles absentes du titre</label>
-  </div>
-
-  <div class="marche" id="marche">
-    <div class="marche-tete">
-      <strong>📊 État du marché</strong>
-      <span class="marche-sous" id="marche-sous">stages en Île-de-France — côté offre</span>
-      <button class="sec" id="btn-marche" onclick="chargerMarche(true)">Analyser</button>
+    <div class="grille-haut">
+      <div class="carte profil">
+        <div class="etiquette">Profil recherché</div>
+        <p id="ref"></p>
+        <div class="meta" id="meta">Chargement…</div>
+      </div>
+      <div class="carte actions">
+        <div class="etiquette">Lancer</div>
+        <button id="btn-tout" class="pri large" onclick="toutLancer()"
+                title="Enchaîne automatiquement la recherche sur toutes les sources PUIS la vérification IA. Rien d'autre à cliquer.">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg>
+          Tout lancer <span>recherche + vérification IA</span></button>
+        <div class="actions-ligne">
+          <button id="btn-verif" class="sec" onclick="lancerVerif()">Vérification IA seule</button>
+          <button id="btn-refresh" class="sec" onclick="rafraichir()">Recherche seule</button>
+        </div>
+        <div class="actions-ligne" style="justify-content:space-between">
+          <label class="champ-n">Vérifier les <input type="number" id="n" min="1" value="10"> premières</label>
+          <label class="chk" title="Interroge seulement les API (Adzuna, Careerjet, Free-Work, pages carrières) sans scraper LinkedIn/Indeed : plusieurs minutes de moins, mais moins d'offres.">
+            <input type="checkbox" id="nojobspy"> Rapide</label>
+        </div>
+      </div>
     </div>
-    <div id="marche-corps"></div>
-  </div>
 
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th class="rk" data-tri="cos" onclick="trier('cos')" title="Rang avant IA (cosinus)">cos ▾</th>
-        <th class="rk" data-tri="ia"  onclick="trier('ia')"  title="Rang après IA">IA</th>
-        <th class="rk" title="Mouvement de rang (avant → après IA)">Δ</th>
-        <th>Offre</th>
-        <th>Entreprise</th>
-        <th>Lieu</th>
-        <th>Durée</th>
-        <th>Début</th>
-        <th class="rk" data-tri="age" data-libelle="âge" onclick="trier('age')" title="Jours depuis la publication de l'annonce (les plus récentes d'abord)">âge</th>
-        <th title="Un lien par source qui a publié l'offre">Liens</th>
-        <th title="Génère un CV adapté à cette offre avec ton master.yaml">CV</th>
-      </tr>
-    </thead>
-    <tbody id="corps"><tr><td colspan="11" class="vide">Chargement…</td></tr></tbody>
-  </table>
+    <details class="carte repli">
+      <summary>Bilan du dernier run <span class="resume">ce que chaque source a rendu, sources écartées</span></summary>
+      <div class="entete-run" id="entete-stages"></div>
+    </details>
+
+    <div class="carte marche" id="marche">
+      <div class="marche-tete">
+        <strong>État du marché</strong>
+        <span class="marche-sous" id="marche-sous">Stages en Île-de-France, côté offre</span>
+        <button class="sec" id="btn-marche" onclick="chargerMarche(true)">Analyser</button>
+      </div>
+      <div id="marche-corps"></div>
+    </div>
+
+    <div class="barre-filtres">
+      <div class="recherche">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="search" id="q" placeholder="Filtrer : titre, entreprise, lieu…" oninput="rendre()">
+      </div>
+      <div class="familles" id="familles"></div>
+      <div class="options">
+        <label class="chk" title="Par défaut, une famille ne retient que les offres qui la portent dans leur TITRE. Coché : aussi celles qui l'ont seulement dans la description ou par la requête qui les a trouvées.">
+          <input type="checkbox" id="elargir" onchange="rendre()"> Familles hors titre</label>
+        <label class="chk" title="Déplie l'analyse écrite par le LLM sous chaque offre vérifiée.">
+          <input type="checkbox" id="tout-deplier" onchange="basculerTout(this.checked)"> Déplier les analyses IA</label>
+      </div>
+    </div>
+
+    <div class="table-cadre">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th class="rk actif" data-tri="cos" data-libelle="Rang" onclick="trier('cos')" title="Rang par similarité sémantique (avant IA)">Rang ▾</th>
+            <th class="rk" data-tri="ia" data-libelle="IA" onclick="trier('ia')" title="Rang après vérification IA, et mouvement par rapport au rang sémantique">IA</th>
+            <th>Offre</th>
+            <th>Durée</th>
+            <th>Début</th>
+            <th class="rk" data-tri="age" data-libelle="Âge" onclick="trier('age')" title="Jours depuis la publication de l'annonce (les plus récentes d'abord)">Âge</th>
+            <th title="Un lien par source qui a publié l'offre">Sources</th>
+            <th title="Génère un CV adapté à cette offre avec ton master.yaml">CV</th>
+          </tr>
+        </thead>
+        <tbody id="corps"><tr><td colspan="8" class="vide">Chargement…</td></tr></tbody>
+      </table>
+    </div>
   </section>
-
+</main>
 <script src="/static/cv_etats.js"></script>
 <script>
 let ETAT = null;
@@ -1151,7 +1315,7 @@ function majProgression(){
   if (ETAT && ETAT.etudiants && ETAT.etudiants.en_cours){
     box.style.display = "block"; bar.style.width = "100%";
     bar.parentElement.style.opacity = ".6";
-    txt.textContent = "🧑‍🍳 Recherche des jobs étudiants en cours (collecte, trajets, dédup)… "
+    txt.textContent = "Recherche des jobs étudiants en cours (collecte, trajets, dédup)… "
                     + "compter 5 à 10 minutes. Les stages restent consultables.";
     return;
   }
@@ -1166,7 +1330,7 @@ function majProgression(){
       : "";
     if (p.total){ bar.style.width = Math.round(100 * p.fait / p.total) + "%";
                   bar.parentElement.style.opacity = "1"; }
-    txt.textContent = etape + "🔄 Recherche en cours" + ou + "… "
+    txt.textContent = etape + "Recherche en cours" + ou + "… "
                     + "ça prend quelques minutes"
                     + (auto ? ", la vérification IA suivra automatiquement." : ".");
     return;
@@ -1178,10 +1342,10 @@ function majProgression(){
     box.style.display = "block"; bar.style.width = pct + "%";
     if (v.indisponible){
       txt.textContent = v.message
-        ? `⚠️ ${v.message} — classement cosinus conservé hors cache.`
-        : "⚠️ Ollama injoignable — démarre `ollama serve`. Classement cosinus conservé.";
+        ? `${v.message} — classement cosinus conservé hors cache.`
+        : "Ollama injoignable — démarre `ollama serve`. Classement cosinus conservé.";
     } else {
-      txt.textContent = `${etape}🔎 Vérification IA ${v.fait}/${v.total} (appels ${v.appels}, cache ${v.cache}) — modèle ${v.modele}`;
+      txt.textContent = `${etape}Vérification IA ${v.fait}/${v.total} (appels ${v.appels}, cache ${v.cache}) — modèle ${v.modele}`;
     }
     return;
   }
@@ -1230,7 +1394,7 @@ function majStatutEtudiants(){
   if (!e) return;
   if (e.en_cours) statut.textContent = "Recherche en cours depuis "
       + new Date(e.debut).toLocaleTimeString('fr-FR') + "…";
-  else if (e.erreur) statut.textContent = "⚠️ Dernière recherche en échec : " + e.erreur;
+  else if (e.erreur) statut.textContent = "Dernière recherche en échec : " + e.erreur;
   else if (e.fin) statut.textContent = `Dernière recherche terminée à `
       + `${new Date(e.fin).toLocaleTimeString('fr-FR')} : ${e.n} offre(s).`;
   else statut.textContent = "";
@@ -1249,7 +1413,7 @@ async function chercherEtudiants(){
 }
 
 // --- Familles (filtre des stages) --------------------------------------------
-function libelle(f){ return (ETAT && ETAT.libelles && ETAT.libelles[f]) || f; }
+function libelle(f){ return ((ETAT && ETAT.libelles && ETAT.libelles[f]) || f).replace(/_/g, " "); }
 
 function rendreFamilles(){
   const noms = [...new Set(ETAT.offres.flatMap(o => o.familles || []))].sort();
@@ -1262,12 +1426,14 @@ function rendreFamilles(){
 function choisirFamille(f){ FAMILLE = f; rendre(); }
 
 function celluleDelta(o){
-  if (o.ia_rang == null) return '<span class="delta-zero">—</span>';
+  if (o.ia_rang == null) return "";
   const d = o.cos_rang - o.ia_rang;   // >0 = monte
-  if (d > 0) return `<span class="delta-up">▲ ${d}</span>`;
-  if (d < 0) return `<span class="delta-down">▼ ${-d}</span>`;
+  if (d > 0) return `<span class="delta-up" title="gagne ${d} place(s) après l'IA">▲ ${d}</span>`;
+  if (d < 0) return `<span class="delta-down" title="perd ${-d} place(s) après l'IA">▼ ${-d}</span>`;
   return '<span class="delta-zero">=</span>';
 }
+
+function niveauScore(s){ return s >= 0.7 ? "s-haut" : s >= 0.4 ? "s-moyen" : "s-bas"; }
 
 // --- Verdict IA : résumé compact dans la ligne, texte complet dans un panneau --
 // Le paragraphe du LLM ne tient pas dans une cellule de tableau (on n'en voyait
@@ -1276,16 +1442,22 @@ function celluleDelta(o){
 function verdictResume(o){
   const v = o.verdict;
   if (!v) return "";
-  let h = `<span class="llm-score">LLM ${v.score.toFixed(2)}</span>`;
+  let h = `<span class="score ${niveauScore(v.score)}" title="Score de pertinence donné par le LLM">${v.score.toFixed(2)}</span>`;
   if (!v.pertinent) h += ' <span class="llm-ko">non pertinent</span>';
   if (v.est_alternance) h += ' <span class="llm-ko">alternance</span>';
   if (v.domaine_match === false) h += ' <span class="llm-ko">hors domaine</span>';
-  if (v.niveau && v.niveau !== "stage" && v.niveau !== "inconnu") h += ` <span class="llm-ko">${esc(v.niveau)}</span>`;
+  // Le schéma attend stage | junior | senior | inconnu, mais un petit modèle
+  // répond parfois en clair (« étudiant », « intermédiaire »). Seul « senior »
+  // est un signal d'alerte ; les équivalents de « stage » ne disent rien.
+  const niv = (v.niveau || "").toLowerCase();
+  if (niv === "senior") h += ` <span class="llm-ko">senior</span>`;
+  else if (!["", "stage", "stagiaire", "étudiant", "etudiant", "inconnu"].includes(niv))
+    h += ` <span class="niveau" title="Niveau estimé par le LLM">${esc(v.niveau)}</span>`;
   const nd = (v.drapeaux_rouges||[]).length;
-  if (nd) h += ` <span class="drapeau">🚩 ${nd} point${nd>1?'s':''} de vigilance</span>`;
+  if (nd) h += ` <span class="drapeau">${nd} point${nd>1?'s':''} de vigilance</span>`;
   const ouvert = DEPLIES.has(o.url);
   h += ` <button class="btn-analyse" onclick="basculer('${encodeURIComponent(o.url)}')">`
-     + `${ouvert ? '▾ masquer' : '▸ lire'} l'analyse IA</button>`;
+     + `${ouvert ? 'Masquer' : 'Lire'} l'analyse ${ouvert ? '▴' : '▾'}</button>`;
   return `<div class="badges">${h}</div>`;
 }
 
@@ -1302,11 +1474,11 @@ function panneauAnalyse(o){
     ? `<p class="an-texte">${esc(v.justification)}</p>`
     : `<p class="an-vide">Le modèle n'a pas rédigé de justification pour cette offre.</p>`;
   const drapeaux = (v.drapeaux_rouges||[]).length
-    ? `<div class="an-drapeaux"><strong>🚩 Points de vigilance</strong><ul>`
+    ? `<div class="an-drapeaux"><strong>Points de vigilance</strong><ul>`
       + v.drapeaux_rouges.map(d => `<li>${esc(d)}</li>`).join("") + `</ul></div>`
     : "";
-  return `<tr class="analyse"><td colspan="11">
-    <div class="an-titre">🤖 Analyse du LLM<span class="an-meta">${meta}</span></div>
+  return `<tr class="analyse"><td colspan="8">
+    <div class="an-titre">Analyse du LLM<span class="an-meta">${meta}</span></div>
     ${texte}${drapeaux}
   </td></tr>`;
 }
@@ -1454,43 +1626,57 @@ function ligne(o){
   const titres = o.familles_titre || [];
   const familles = (o.familles||[]).map(f =>
      `<span class="fam${titres.includes(f)?' titre':''}">${esc(libelle(f))}</span>`).join("");
-  const neuf = o.nouvelle ? '<span class="delta-new">nouveau</span> ' : "";
+  const neuf = o.nouvelle ? '<span class="delta-new">nouveau</span>' : "";
+  const sous = [esc(o.company), esc(o.location)].filter(Boolean).join('<span class="sep">·</span>');
+  const etiquettes = badges + familles;
   return `<tr>
-    <td class="rk cos">${o.cos_rang}</td>
-    <td class="rk ia">${o.ia_rang!=null?o.ia_rang:'<span class="delta-zero">—</span>'}</td>
-    <td class="rk">${celluleDelta(o)}</td>
-    <td>
+    <td class="rk"><span class="rang">${o.cos_rang}</span></td>
+    <td class="rk">${o.ia_rang!=null?`<span class="rang-ia">${o.ia_rang}</span>`:'<span class="delta-zero">—</span>'}${celluleDelta(o)}</td>
+    <td class="offre">
       ${neuf}<a class="titre" href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.title)}</a>
-      ${badges?`<div class="badges">${badges}</div>`:""}
-      ${familles?`<div class="badges">${familles}</div>`:""}
+      ${sous?`<div class="sous">${sous}</div>`:""}
+      ${etiquettes?`<div class="badges">${etiquettes}</div>`:""}
       ${verdictResume(o)}
     </td>
-    <td>${esc(o.company)||'—'}</td>
-    <td>${esc(o.location)||'—'}</td>
-    <td>${o.duree_mois?o.duree_mois+' mois':'—'}</td>
-    <td>${esc(o.date_debut)||'—'}</td>
-    <td class="age">${o.age_jours!=null?Math.max(o.age_jours,0)+' j':'—'}</td>
+    <td class="num">${o.duree_mois?o.duree_mois+' mois':'—'}</td>
+    <td class="num">${esc(o.date_debut)||'—'}</td>
+    <td class="rk age">${o.age_jours!=null?Math.max(o.age_jours,0)+' j':'—'}</td>
     <td>${celluleLiens(o)}</td>
     ${celluleCV(o)}
   </tr>` + panneauAnalyse(o);
 }
 
+// Chiffres clés en tête de l'onglet stages.
+function rendreStats(nVerif){
+  const nNouv = ETAT.offres.filter(o => o.nouvelle).length;
+  const nCombo = ETAT.offres.filter(o => (o.tags||[]).some(t => t.includes("IA+CYBER"))).length;
+  const cartes = [
+    [ETAT.n_total, "offres classées"],
+    [nVerif, "vérifiées par l'IA"],
+    [nNouv, "nouvelles au dernier run"],
+    [nCombo, "à l'intersection IA × cyber"],
+  ];
+  document.getElementById("stats").innerHTML = cartes.map(([v, l]) =>
+    `<div class="stat"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+}
+
 function rendre(){
   if (!ETAT) return;
   document.getElementById("modele").textContent = ETAT.modele;
-  document.getElementById("ref").innerHTML = "<strong>Profil recherché :</strong> " + esc(ETAT.profil);
-  const gen = ETAT.genere_le ? new Date(ETAT.genere_le).toLocaleString('fr-FR') : "jamais";
+  document.getElementById("ref").textContent = ETAT.profil || "";
+  const gen = ETAT.genere_le ? new Date(ETAT.genere_le).toLocaleString('fr-FR',
+      {dateStyle: "long", timeStyle: "short"}) : "jamais";
   const nVerif = ETAT.offres.filter(o => o.verdict).length;
   document.getElementById("meta").textContent =
-     `${ETAT.n_total} offre(s) · classement généré le ${gen} · ${nVerif} vérifiée(s) par l'IA`
-     + ` · sources : ${(ETAT.sources||[]).join(", ")}`;
+     `Classement du ${gen} · sources : ${(ETAT.sources||[]).join(", ")}`;
+  rendreStats(nVerif);
   const nInput = document.getElementById("n");
   nInput.max = ETAT.n_total || 1;
   if (!nInput.dataset.touched) nInput.value = Math.min(ETAT.top_n_defaut||10, ETAT.n_total||10);
 
   rendreFamilles();
   document.querySelector('.onglets [data-onglet="stages"]').innerHTML =
-     `🎓 Stages <span class="compteur">${ETAT.n_total}</span>`;
+     `Stages<span class="compteur">${ETAT.n_total}</span>`;
 
   const q = (document.getElementById("q").value||"").toLowerCase();
   let offres = ETAT.offres.slice();
@@ -1512,7 +1698,7 @@ function rendre(){
   const corps = document.getElementById("corps");
   corps.innerHTML = offres.length
     ? offres.map(ligne).join("")
-    : `<tr><td colspan="11" class="vide">${ETAT.n_total?"Aucune offre ne correspond au filtre.":"Aucun classement — clique « 🚀 Tout lancer »."}</td></tr>`;
+    : `<tr><td colspan="8" class="vide">${ETAT.n_total?"Aucune offre ne correspond au filtre.":"Aucun classement pour l'instant : lance une recherche avec « Tout lancer »."}</td></tr>`;
 
   // Seul point de ré-armement du polling CV. `rendre` est appelé après
   // CHAQUE changement d'affichage — filtre, tri, retour de POST, tour de
