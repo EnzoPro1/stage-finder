@@ -37,6 +37,7 @@ import extract
 import llm
 import observabilite
 import ollama_pool
+import progression
 import ranker
 import rapport
 import report
@@ -170,14 +171,22 @@ def collecter(utiliser_jobspy: bool, perimetre: Perimetre | None = None) -> list
     )
 
     toutes: list[Offre] = []
+    total, finies = len(api) + len(scraping), 0
+    progression.signaler("Collecte des sources", 0, total)
     if api:
         with ThreadPoolExecutor(max_workers=config.MAX_THREADS_COLLECTE) as executor:
             futures = [executor.submit(_collecter_source, s, perimetre) for s in api]
             for future in as_completed(futures):
                 toutes.extend(future.result())
+                finies += 1
+                progression.signaler("Collecte des sources", finies, total)
 
     for source in scraping:
+        # Le scraping est séquentiel et c'est l'étape la plus longue : on le nomme.
+        progression.signaler(f"Collecte des sources ({source.nom}, le plus long)",
+                             finies, total)
         toutes.extend(_collecter_source(source, perimetre))
+        finies += 1
 
     logger.info("Collecte totale : %d offre(s) normalisée(s).", len(toutes))
     return toutes
@@ -249,7 +258,16 @@ def collecter_et_classer(utiliser_jobspy: bool) -> list[tuple[Offre, float]]:
 
     Extrait de ``executer`` pour être réutilisé tel quel par l'app web (app.py),
     qui affiche ce classement immédiatement, avant toute vérification IA.
+    L'étape en cours est tenue dans ``progression`` (lue par l'app), et
+    effacée à la sortie, y compris sur exception.
     """
+    try:
+        return _collecter_et_classer(utiliser_jobspy)
+    finally:
+        progression.effacer()
+
+
+def _collecter_et_classer(utiliser_jobspy: bool) -> list[tuple[Offre, float]]:
     # Nouveau run : le digest des modèles d'embeddings Ollama sera relu (un
     # `ollama pull` fait depuis le run précédent invalide leur cache).
     cache_embeddings.oublier_digests()
@@ -258,6 +276,7 @@ def collecter_et_classer(utiliser_jobspy: bool) -> list[tuple[Offre, float]]:
         logger.warning("Aucune offre collectée. Vérifie tes clés API dans le .env.")
         return []
 
+    progression.signaler("Filtres et déduplication")
     offres = filtrer(offres)
     # Bilan par source : il ne peut être rendu qu'ICI, après les filtres — les
     # survivantes ne sont connues qu'une fois `filtrer` passé — et il doit
@@ -277,10 +296,12 @@ def collecter_et_classer(utiliser_jobspy: bool) -> list[tuple[Offre, float]]:
     # UNE fois et partagés.
     connus = {}
     if config.DEDUP_FLOUE_ACTIVE:
+        progression.signaler(f"Déduplication floue ({len(offres)} offres)")
         embeddings = ranker.encoder_offres(offres, modele=config.MODELE_EMBEDDING_DEDUP)
         offres, embeddings = dedup.dedupliquer_flou(offres, embeddings)
         connus[config.MODELE_EMBEDDING_DEDUP] = embeddings
 
+    progression.signaler(f"Classement ({len(offres)} offres)")
     resultat = ranker.classer_avec_repli(offres, connus)
     # Le modèle qui a RÉELLEMENT servi part avec le bilan du run (table `runs`).
     releve = observabilite.actif()

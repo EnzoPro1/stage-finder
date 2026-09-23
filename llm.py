@@ -47,7 +47,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TypeVar
 
 import requests
@@ -369,11 +369,13 @@ def embed(
     reglages: Reglages | None = None,
     modele: str | None = None,
     taille_lot: int = 16,
+    apres_lot: Callable[[int], None] | None = None,
 ) -> list[list[float]]:
     """Embeddings de ``textes`` via ``/api/embed``, dans l'ordre, par lots.
 
     Les lots bornent la mémoire d'un appel ; ils sont envoyés L'UN APRÈS
-    L'AUTRE, jamais en parallèle (VRAM limitée).
+    L'AUTRE, jamais en parallèle (VRAM limitée). ``apres_lot(n)`` est appelé
+    après chaque lot avec le nombre de textes encodés jusque-là.
     """
     if not textes:
         return []
@@ -402,6 +404,8 @@ def embed(
                 f"{recu} vecteur(s) reçu(s)."
             )
         vecteurs.extend(rendus)
+        if apres_lot is not None:
+            apres_lot(len(vecteurs))
     return vecteurs
 
 

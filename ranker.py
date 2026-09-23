@@ -29,6 +29,7 @@ import config
 import embeddings_env
 import extract
 import llm
+import progression
 from normalize import Offre
 
 # Le magasin de certificats de l'OS, pour le cas où le modèle doit encore
@@ -69,10 +70,11 @@ class EncodeurOllama:
     def __init__(self, nom: str) -> None:
         self.nom = nom[len(PREFIXE_OLLAMA):] if est_ollama(nom) else nom
 
-    def encode(self, textes, normalize_embeddings: bool = False, **_ignores) -> np.ndarray:
+    def encode(self, textes, normalize_embeddings: bool = False, progression=None,
+               **_ignores) -> np.ndarray:
         import cache_embeddings
 
-        vecteurs = cache_embeddings.encoder(list(textes), self.nom)
+        vecteurs = cache_embeddings.encoder(list(textes), self.nom, progression=progression)
         if normalize_embeddings and len(vecteurs):
             normes = np.linalg.norm(vecteurs, axis=1, keepdims=True)
             vecteurs = vecteurs / np.where(normes == 0, 1.0, normes)
@@ -321,8 +323,14 @@ def encoder_offres(offres: list[Offre], modele: str | None = None) -> np.ndarray
     modele = _charger_modele(modele)
     textes = [_texte_a_encoder(o) for o in offres]
     _surveiller_troncature(modele, textes)
+    options = {}
+    if isinstance(modele, EncodeurOllama):
+        # Encodage GPU, des minutes au premier passage : l'app affiche où il en est.
+        nom = modele.nom
+        options["progression"] = (
+            lambda fait, total: progression.signaler(f"Classement ({nom})", fait, total))
     return modele.encode(
-        textes, normalize_embeddings=True, batch_size=32, show_progress_bar=False
+        textes, normalize_embeddings=True, batch_size=32, show_progress_bar=False, **options
     )
 
 

@@ -25,9 +25,13 @@ def faux_embed(monkeypatch):
     """Vecteur déterministe par texte ; garde la trace des lots envoyés."""
     lots = []
 
-    def embed(textes, *, reglages=None, modele=None, taille_lot=16):
+    def embed(textes, *, reglages=None, modele=None, taille_lot=16, apres_lot=None):
         lots.append((modele, list(textes)))
-        return [[float(len(t)), 1.0, float(sum(map(ord, t)) % 7)] for t in textes]
+        vecteurs = [[float(len(t)), 1.0, float(sum(map(ord, t)) % 7)] for t in textes]
+        if apres_lot is not None:  # comme le vrai : après chaque lot, cumul
+            for fin in range(taille_lot, len(textes) + taille_lot, taille_lot):
+                apres_lot(min(fin, len(textes)))
+        return vecteurs
     monkeypatch.setattr(cache_embeddings.llm, "embed", embed)
     return lots
 

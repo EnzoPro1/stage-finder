@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -105,12 +106,17 @@ def encoder(
     *,
     chemin: str | Path | None = None,
     reglages: llm.Reglages | None = None,
+    progression: Callable[[int, int], None] | None = None,
 ) -> np.ndarray:
     """Embeddings de ``textes`` (matrice ``n × dim``, float32), cache d'abord.
 
     Seuls les textes absents du cache partent vers Ollama, dédoublonnés, par
     lots séquentiels (``llm.embed``). Les vecteurs sont rendus BRUTS : la
     normalisation reste l'affaire de l'appelant.
+
+    ``progression(fait, total)`` : appelé après chaque lot, textes déjà en
+    cache compris. L'avancement est aussi journalisé tous les 10 % — sans
+    lui, des centaines d'offres s'encodent en silence pendant des minutes.
     """
     if not textes:
         return np.zeros((0, 0), dtype=np.float32)
@@ -128,7 +134,21 @@ def encoder(
                 manquants.setdefault(cle, texte)
 
         if manquants:
-            vecteurs = llm.embed(list(manquants.values()), reglages=reglages, modele=modele)
+            deja = len(set(cles)) - len(manquants)
+            total = len(set(cles))
+            palier = {"prochain": 10}
+
+            def apres_lot(calcules: int) -> None:
+                fait = deja + calcules
+                pourcent = 100 * fait // total
+                if pourcent >= palier["prochain"] or fait == total:
+                    logger.info("Embeddings « %s » : %d/%d…", modele, fait, total)
+                    palier["prochain"] = (pourcent // 10 + 1) * 10
+                if progression is not None:
+                    progression(fait, total)
+
+            vecteurs = llm.embed(list(manquants.values()), reglages=reglages, modele=modele,
+                                 apres_lot=apres_lot)
             nouveaux = {}
             for cle, vecteur in zip(manquants, vecteurs):
                 nouveaux[cle] = np.asarray(vecteur, dtype=np.float32)

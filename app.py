@@ -50,6 +50,7 @@ import llm
 import main
 import market
 import observabilite
+import progression
 import rapport
 import reglages_cv
 import storage
@@ -369,6 +370,7 @@ def api_etat():
             "profil": config.REQUETE_REFERENCE,
             "top_n_defaut": _reglages_llm().top_n,
             "sources": config.SOURCES_ACTIVES,
+            "progression": progression.lire(),
         }
     return jsonify(etat)
 
@@ -1156,7 +1158,15 @@ function majProgression(){
   if (ETAT && ETAT.collecte.en_cours){
     box.style.display = "block"; bar.style.width = "100%";
     bar.parentElement.style.opacity = ".6";
-    txt.textContent = etape + "🔄 Recherche en cours (collecte des sources + ranking)… "
+    // Étape courante, envoyée par le pipeline (progression.py) : sans elle,
+    // l'encodage de centaines d'offres ressemblait à un plantage.
+    const p = ETAT.progression || {};
+    const ou = p.libelle
+      ? ` — ${p.libelle}${p.total ? ` : ${p.fait}/${p.total}` : ""}`
+      : "";
+    if (p.total){ bar.style.width = Math.round(100 * p.fait / p.total) + "%";
+                  bar.parentElement.style.opacity = "1"; }
+    txt.textContent = etape + "🔄 Recherche en cours" + ou + "… "
                     + "ça prend quelques minutes"
                     + (auto ? ", la vérification IA suivra automatiquement." : ".");
     return;
