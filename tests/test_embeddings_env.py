@@ -63,6 +63,7 @@ def test_preparer_est_idempotente(monkeypatch):
     assert a["hors_ligne"] == b["hors_ligne"] is True
 
 
+@pytest.mark.cv_forge
 def test_preparer_n_importe_PAS_huggingface_hub():
     """Régression, et le piège était subtil.
 
@@ -90,6 +91,7 @@ def test_preparer_n_importe_PAS_huggingface_hub():
     )
 
 
+@pytest.mark.cv_forge
 def test_le_reglage_prend_effet_a_l_import_ulterieur():
     """Le seul critère qui compte : la constante que la lib lira vraiment."""
     code = (
@@ -124,6 +126,7 @@ def test_la_sonde_accepte_un_depot_qualifie(tmp_path, monkeypatch):
     assert embeddings_env.modele_en_cache("une-org/un-modele") is True
 
 
+@pytest.mark.cv_forge
 def test_le_modele_reel_est_bien_en_cache():
     """Sans mock. Le ranker de stage_finder l'a téléchargé : le worker ne
     doit donc jamais avoir besoin du réseau pour générer un CV."""
@@ -139,6 +142,7 @@ def test_un_modele_inconnu_n_est_pas_declare_en_cache():
     assert embeddings_env.modele_en_cache("modele-qui-n-existe-pas-du-tout") is False
 
 
+@pytest.mark.cv_forge
 def test_preparer_sans_argument_vise_le_modele_de_cv_forge(monkeypatch):
     from cv_forge.embed import DEFAULT_EMBED_MODEL
 

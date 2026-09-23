@@ -58,6 +58,7 @@ def _jobs(conn):
 # =====================================================================
 # Enfilement
 # =====================================================================
+@pytest.mark.cv_forge
 def test_le_batch_enfile_les_offres_pourvues_en_texte(base, capsys):
     for i in range(3):
         _offre(base.conn, f"cle-{i}", texte=f"Texte n°{i}, distinct des autres.")
@@ -67,6 +68,7 @@ def test_le_batch_enfile_les_offres_pourvues_en_texte(base, capsys):
     assert "enfilées      : 3" in capsys.readouterr().out
 
 
+@pytest.mark.cv_forge
 def test_le_batch_ignore_les_offres_sans_texte(base, capsys):
     """`text_missing` n'entre pas dans la file : un job voué à échouer ne
     ferait qu'occuper le passage et bruiter l'historique.
@@ -83,6 +85,7 @@ def test_le_batch_ignore_les_offres_sans_texte(base, capsys):
     assert "sans texte    : 1   [TEXT_MISSING]" in capsys.readouterr().out
 
 
+@pytest.mark.cv_forge
 def test_l_idempotence_vaut_aussi_pour_le_batch(base, capsys):
     """Deux batches d'affilée ne régénèrent rien : même hash, même job.
 
@@ -99,6 +102,7 @@ def test_l_idempotence_vaut_aussi_pour_le_batch(base, capsys):
     assert "déjà connues  : 1" in capsys.readouterr().out
 
 
+@pytest.mark.cv_forge
 def test_deux_offres_au_meme_texte_partagent_un_job(base):
     """L'idempotence porte sur le TEXTE, pas sur la clé d'offre : deux
     annonces identiques republiées ne coûtent pas deux fois 800 s."""
@@ -109,6 +113,7 @@ def test_deux_offres_au_meme_texte_partagent_un_job(base):
     assert _jobs(base.conn) == 1
 
 
+@pytest.mark.cv_forge
 def test_le_batch_prend_les_mieux_classees_d_abord(base):
     _offre(base.conn, "faible", texte="Texte faible.", score=0.10)
     _offre(base.conn, "forte", texte="Texte fort.", score=0.90)
@@ -120,6 +125,7 @@ def test_le_batch_prend_les_mieux_classees_d_abord(base):
     assert enfilees == {"forte", "moyenne"}
 
 
+@pytest.mark.cv_forge
 def test_une_offre_jamais_classee_ne_passe_pas_devant(base):
     """En SQLite, NULL trie AVANT tout le reste en DESC. Sans le
     `IS NULL` explicite, une offre sans score doublerait la meilleure."""
@@ -132,6 +138,7 @@ def test_une_offre_jamais_classee_ne_passe_pas_devant(base):
     assert enfilees == ["forte"]
 
 
+@pytest.mark.cv_forge
 def test_un_master_introuvable_arrete_le_batch_tout_de_suite(base, monkeypatch,
                                                              capsys):
     """Le même refus pour les 12 offres : le répéter douze fois n'apprend
@@ -165,6 +172,7 @@ class FauxWorker:
         return self._traites
 
 
+@pytest.mark.cv_forge
 def test_le_batch_consomme_lui_meme_quand_le_verrou_est_libre(base, monkeypatch,
                                                               capsys):
     _offre(base.conn, "cle-a", texte="Un texte bien réel.")
@@ -175,6 +183,7 @@ def test_le_batch_consomme_lui_meme_quand_le_verrou_est_libre(base, monkeypatch,
     assert "2 job(s) traité(s)" in capsys.readouterr().out
 
 
+@pytest.mark.cv_forge
 def test_le_batch_n_essaie_pas_de_doubler_un_worker_deja_en_place(base, capsys):
     """La décision se prend À L'EXÉCUTION, d'après ce qui tourne.
 
@@ -198,6 +207,7 @@ def test_le_batch_n_essaie_pas_de_doubler_un_worker_deja_en_place(base, capsys):
     assert jobs.en_attente(base.conn) == 1
 
 
+@pytest.mark.cv_forge
 def test_enfiler_seulement_ne_consomme_rien(base, monkeypatch, capsys):
     _offre(base.conn, "cle-a", texte="Un texte bien réel.")
     monkeypatch.setattr(cv_cli.worker_module, "Worker", FauxWorker)
@@ -208,6 +218,7 @@ def test_enfiler_seulement_ne_consomme_rien(base, monkeypatch, capsys):
     assert "rien n'a été consommé" in capsys.readouterr().out
 
 
+@pytest.mark.cv_forge
 def test_une_file_vide_ne_reveille_pas_le_worker(base, monkeypatch):
     """Aucune offre pourvue : inutile de charger quoi que ce soit."""
     _offre(base.conn, "sans", texte=None)
@@ -221,6 +232,7 @@ def test_une_file_vide_ne_reveille_pas_le_worker(base, monkeypatch):
 # =====================================================================
 # Le batch n'a pas de chemin de génération à lui
 # =====================================================================
+@pytest.mark.cv_forge
 def test_le_batch_ne_touche_jamais_cv_forge_directement(base, monkeypatch):
     """Le verrou du CP5, écrit comme un sabotage.
 
@@ -240,6 +252,7 @@ def test_le_batch_ne_touche_jamais_cv_forge_directement(base, monkeypatch):
     assert cv_cli.cmd_batch(_args(base, enfiler_seulement=False)) == 0
 
 
+@pytest.mark.cv_forge
 def test_le_batch_passe_par_jobs_demander(base, monkeypatch):
     """Un seul point d'entrée pour l'enfilement, partagé avec l'UI."""
     vus = []

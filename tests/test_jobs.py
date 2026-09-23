@@ -108,12 +108,14 @@ def test_ouvrir_en_memoire_ne_leve_pas(conn):
 # =====================================================================
 # Hash d'idempotence
 # =====================================================================
+@pytest.mark.cv_forge
 def test_le_hash_est_stable(master):
     a = jobs.calculer_hash("Texte", master_path=master, config=FauxConfig())
     b = jobs.calculer_hash("Texte", master_path=master, config=FauxConfig())
     assert a == b
 
 
+@pytest.mark.cv_forge
 def test_le_hash_ignore_la_mise_en_page(master):
     """Même annonce recopiée autrement = même CV : on ne relance rien."""
     a = jobs.calculer_hash("Stage IA chez ACME", master_path=master, config=FauxConfig())
@@ -122,12 +124,14 @@ def test_le_hash_ignore_la_mise_en_page(master):
     assert a == b
 
 
+@pytest.mark.cv_forge
 def test_le_hash_suit_le_texte(master):
     a = jobs.calculer_hash("Stage IA", master_path=master, config=FauxConfig())
     b = jobs.calculer_hash("Stage Cyber", master_path=master, config=FauxConfig())
     assert a != b
 
 
+@pytest.mark.cv_forge
 def test_le_hash_suit_le_master(master):
     a = jobs.calculer_hash("Texte", master_path=master, config=FauxConfig())
     master.write_text("nom: Modifie\n", encoding="utf-8")
@@ -135,12 +139,14 @@ def test_le_hash_suit_le_master(master):
     assert a != b, "un master modifié doit invalider les CV déjà produits"
 
 
+@pytest.mark.cv_forge
 def test_le_hash_suit_la_config(master):
     a = jobs.calculer_hash("Texte", master_path=master, config=FauxConfig("v1"))
     b = jobs.calculer_hash("Texte", master_path=master, config=FauxConfig("v2"))
     assert a != b
 
 
+@pytest.mark.cv_forge
 def test_les_composantes_ne_peuvent_pas_se_chevaucher(master):
     """Sans séparateur sûr, deux découpages des mêmes octets collideraient."""
     a = jobs.calculer_hash("AB", master_path=master, config=FauxConfig("C"))
@@ -520,6 +526,7 @@ def test_reenregistrer_remplace_sans_dupliquer(conn):
 # sur la version partagée : si elle régresse, les trois régressent
 # ensemble, ce qui est précisément le but.
 # =====================================================================
+@pytest.mark.cv_forge
 def test_demander_enfile_et_rend_le_job(conn, master):
     _offre(conn)
     job, reutilise = jobs.demander(conn, "cle-a", master_path=master,
@@ -529,6 +536,7 @@ def test_demander_enfile_et_rend_le_job(conn, master):
     assert job["offer_id"] == "cle-a"
 
 
+@pytest.mark.cv_forge
 def test_demander_est_idempotente(conn, master):
     """Deux demandes identiques = un seul job. C'est ce dont le batch hérite."""
     _offre(conn)

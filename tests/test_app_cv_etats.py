@@ -94,6 +94,7 @@ def test_un_job_l_emporte_sur_l_absence_de_texte(client, base):
 # =====================================================================
 # Cohérence avec la lecture unitaire du CP3
 # =====================================================================
+@pytest.mark.cv_forge
 def test_la_lecture_groupee_dit_la_meme_chose_que_l_unitaire(client, base):
     """Le test qui compte. Deux chemins de lecture, un seul résultat."""
     for i in range(4):
@@ -115,6 +116,7 @@ def test_la_lecture_groupee_dit_la_meme_chose_que_l_unitaire(client, base):
                 f"cle-{i} : « {champ} » diverge entre groupé et unitaire")
 
 
+@pytest.mark.cv_forge
 def test_les_positions_groupees_valent_les_positions_unitaires(client, base):
     """`positions_pending` est une SECONDE implémentation du rang. Si elle
     diverge de `position()`, la page annonce un faux tour de passage."""

@@ -68,12 +68,14 @@ def test_worker_suit_les_variables(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # Modèle de l'extraction cv_forge : distinct de la vérification
 # ---------------------------------------------------------------------------
+@pytest.mark.cv_forge
 def test_forge_config_par_defaut():
     f = reglages_cv.forge_config()
     assert (f.model, f.think, f.num_ctx, f.keep_alive) == ("qwen3:4b", True, 8192, "10m")
     assert f.ollama_url == "http://localhost:11434/api/chat"
 
 
+@pytest.mark.cv_forge
 def test_la_verification_ne_change_pas_le_modele_des_cv(monkeypatch):
     avant = reglages_cv.forge_config().config_version
     monkeypatch.setenv("SF_LLM_MODEL", "gemma3:4b")
@@ -82,6 +84,7 @@ def test_la_verification_ne_change_pas_le_modele_des_cv(monkeypatch):
     assert reglages_cv.forge_config().config_version == avant
 
 
+@pytest.mark.cv_forge
 def test_les_cv_ne_changent_pas_la_verification(monkeypatch):
     import llm
 
@@ -93,11 +96,13 @@ def test_les_cv_ne_changent_pas_la_verification(monkeypatch):
     assert r.modele == "qwen3:4b" and r.think is False
 
 
+@pytest.mark.cv_forge
 def test_url_d_ollama_partagee(monkeypatch):
     monkeypatch.setenv("SF_OLLAMA_URL", "http://gpu:11434/")
     assert reglages_cv.forge_config().ollama_url == "http://gpu:11434/api/chat"
 
 
+@pytest.mark.cv_forge
 @pytest.mark.parametrize("brut, attendu", [("300", 300), ("30m", "30m")])
 def test_keep_alive_cv(monkeypatch, brut, attendu):
     monkeypatch.setenv("SF_CV_LLM_KEEP_ALIVE", brut)
@@ -109,6 +114,7 @@ def test_keep_alive_cv_invalide_nomme_la_variable():
         reglages_cv.charger_reglages(env={"SF_CV_LLM_KEEP_ALIVE": "dix minutes"})
 
 
+@pytest.mark.cv_forge
 def test_une_seule_forge_config_pour_tous(tmp_path):
     """Worker et demandes (app, CLI) : même config_version, donc même offer_hash."""
     w = worker.Worker(db_path=str(tmp_path / "x.db"))

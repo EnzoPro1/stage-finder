@@ -37,6 +37,22 @@ def pytest_configure(config):
         "config_reelle: le test lit la configuration RÉELLE du poste (.env et "
         "variables SF_* compris) au lieu d'un environnement neutre.",
     )
+    config.addinivalue_line(
+        "markers",
+        "cv_forge: le test a besoin du paquet cv_forge (dépôt privé, installé "
+        "à part) ; sauté quand il est absent, comme sur un clone public ou en CI.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    import importlib.util
+
+    if importlib.util.find_spec("cv_forge") is not None:
+        return
+    saut = pytest.mark.skip(reason="cv_forge non installé : génération de CV indisponible")
+    for item in items:
+        if "cv_forge" in item.keywords:
+            item.add_marker(saut)
 
 
 @pytest.fixture(autouse=True)

@@ -110,6 +110,7 @@ def _nb_jobs(conn) -> int:
 # =====================================================================
 # POST /api/offers/<id>/cv — idempotence
 # =====================================================================
+@pytest.mark.cv_forge
 def test_deux_demandes_identiques_partagent_le_meme_job(client, base):
     """Deux clics, ou un rafraîchissement de page, ne relancent pas huit
     cents secondes d'extraction pour un PDF identique."""
@@ -125,6 +126,7 @@ def test_deux_demandes_identiques_partagent_le_meme_job(client, base):
     assert _nb_jobs(base.conn) == 1
 
 
+@pytest.mark.cv_forge
 def test_un_texte_different_donne_un_job_different(client, base):
     """L'idempotence porte sur le CONTENU, pas sur l'identifiant d'offre :
     une annonce ré-éditée doit bien produire un nouveau CV."""
@@ -138,6 +140,7 @@ def test_un_texte_different_donne_un_job_different(client, base):
     assert _nb_jobs(base.conn) == 2
 
 
+@pytest.mark.cv_forge
 def test_une_mise_en_page_differente_ne_cree_pas_de_second_job(client, base):
     """Même texte replié différemment (espaces, retours à la ligne) : c'est
     tout l'objet de `normalize_for_hash`, et on vérifie qu'on le traverse
@@ -155,6 +158,7 @@ def test_une_mise_en_page_differente_ne_cree_pas_de_second_job(client, base):
 # =====================================================================
 # POST — les refus, qui ne créent AUCUN job
 # =====================================================================
+@pytest.mark.cv_forge
 def test_offer_not_found_est_le_meme_code_aux_deux_points_d_emission(client, base):
     """Une offre absente au POST et une offre qui DISPARAÎT entre
     l'enfilement et le traitement sont la même situation, vue de deux
@@ -171,6 +175,7 @@ def test_offer_not_found_est_le_meme_code_aux_deux_points_d_emission(client, bas
     assert dans_le_worker["error_code"] == "OFFER_NOT_FOUND"
 
 
+@pytest.mark.cv_forge
 def test_une_offre_sans_texte_est_refusee_sans_creer_de_job(client, base):
     """`TEXT_MISSING` est un code propre à stage_finder : une `OfferInput`
     porte toujours son texte, donc cv_forge ne peut pas le produire.
@@ -191,6 +196,7 @@ def test_une_offre_sans_texte_est_refusee_sans_creer_de_job(client, base):
     assert _nb_jobs(base.conn) == 0
 
 
+@pytest.mark.cv_forge
 def test_un_master_introuvable_est_refuse_sans_creer_de_job(client, base, monkeypatch):
     """Un master absent ferait échouer CHAQUE offre de la même façon : le
     découvrir après coup, job par job, serait une perte sèche."""
@@ -207,6 +213,7 @@ def test_un_master_introuvable_est_refuse_sans_creer_de_job(client, base, monkey
 # =====================================================================
 # GET /api/jobs/<id>
 # =====================================================================
+@pytest.mark.cv_forge
 def test_la_lecture_d_un_job_expose_exactement_le_contrat(client, base):
     _offre(base.conn)
     job_id = client.post("/api/offers/cle-a/cv").get_json()["job_id"]
@@ -224,6 +231,7 @@ def test_la_lecture_d_un_job_expose_exactement_le_contrat(client, base):
     assert vue["attempts"] == 0
 
 
+@pytest.mark.cv_forge
 def test_la_position_reflete_l_ordre_de_service(client, base):
     """FIFO strict : la position affichée ne peut pas mentir sur le tour
     de passage, puisqu'elle compte exactement ce que compte le claim."""
@@ -357,6 +365,7 @@ def test_le_telechargement_d_un_job_inconnu_est_un_404_propre(client, base):
     assert reponse.get_json()["error_code"] == "JOB_NOT_FOUND"
 
 
+@pytest.mark.cv_forge
 def test_le_telechargement_avant_la_fin_annonce_l_attente(client, base):
     _offre(base.conn)
     job_id = client.post("/api/offers/cle-a/cv").get_json()["job_id"]
@@ -470,6 +479,7 @@ def test_chaque_route_est_protegee_par_le_filet(client, base, monkeypatch, route
     assert reponse.get_json()["error_code"] == "INTERNAL_ERROR"
 
 
+@pytest.mark.cv_forge
 def test_le_catalogue_suit_cv_forge():
     """Verrou : si cv_forge ajoute un code, ce test tombe et oblige à
     décider de son sort côté HTTP, plutôt que de le voir se replier

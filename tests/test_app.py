@@ -153,6 +153,7 @@ def test_la_collecte_web_persiste_offres_et_textes(tmp_path, monkeypatch):
         conn.close()
 
 
+@pytest.mark.cv_forge
 def test_le_bouton_generer_cv_marche_sur_une_offre_tout_juste_collectee(
         tmp_path, monkeypatch, client):
     """Le bout en bout du défaut : collecter puis cliquer.

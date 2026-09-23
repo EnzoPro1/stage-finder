@@ -302,6 +302,7 @@ def test_un_echec_sans_pile_ne_casse_pas_l_enregistrement(base):
     assert jobs.lire(base.conn, job["id"])["traceback"] is None
 
 
+@pytest.mark.cv_forge
 def test_le_pont_prepare_l_environnement_avant_de_charger_l_encodeur(
         base, tmp_path, monkeypatch):
     """L'ordre EST le propos : `truststore` doit être injecté AVANT que
@@ -372,6 +373,7 @@ def test_une_exception_de_generate_cv_ne_tue_pas_le_worker(base):
 # seul endroit où stage_finder touche cv_forge. Ceux-ci l'exercent, en
 # ne remplaçant que `generate_cv` elle-même.
 # =====================================================================
+@pytest.mark.cv_forge
 def test_le_pont_construit_un_OfferInput_conforme(base, tmp_path, monkeypatch):
     import cv_forge
 
@@ -405,6 +407,7 @@ def test_le_pont_construit_un_OfferInput_conforme(base, tmp_path, monkeypatch):
     assert vus["out_dir"].parent == tmp_path / "out"
 
 
+@pytest.mark.cv_forge
 def test_le_pont_prend_le_jeton_pendant_l_appel(base, tmp_path, monkeypatch):
     """Le jeton entoure l'APPEL, pas le job : c'est le seul moment où une
     inférence est réellement en vol."""
@@ -429,6 +432,7 @@ def test_le_pont_prend_le_jeton_pendant_l_appel(base, tmp_path, monkeypatch):
     ollama_pool.JETON.release()
 
 
+@pytest.mark.cv_forge
 def test_la_config_forge_par_defaut_est_celle_de_cv_forge(base):
     """Sans injection, le worker doit construire une vraie `ForgeConfig` —
     c'est elle qui porte le `config_version` de la clé d'idempotence."""
